@@ -1,9 +1,10 @@
 [package]
 name = "packed-queries"
 version = "0.1.0"
-authors = ["Hao Shi <shisoftgenius@gmail.com>"]
+authors = ["Hao Shi <haoshi@umass.edu>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+memmap2 = "0.2"
+minilp = "0.2.2"
+kmeans = "0.2.0"
