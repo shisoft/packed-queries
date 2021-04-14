@@ -4,7 +4,7 @@ use memmap2::*;
 use minilp::{ComparisonOp, LinearExpr, OptimizationDirection, Problem};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::Result;
+use json5;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -113,7 +113,7 @@ fn main() {
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let str_line = line.unwrap();
-        let query_res = serde_json::from_str::<Query>(&str_line);
+        let query_res = json5::from_str::<Query>(&str_line);
         match query_res {
             Ok(query) => {
                 println!("Accepting query {:?}", query);
