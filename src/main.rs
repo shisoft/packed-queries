@@ -112,10 +112,13 @@ fn main() {
     for line in stdin.lock().lines() {
         let str_line = line.unwrap();
         let query_res = serde_json::from_str::<Query>(&str_line);
-        if let Ok(query) = query_res {
-            println!("Accepting query {:?}", query);
-        } else {
-            println!("Cannot parse json query \"{}\"", str_line);
+        match query_res {
+            Ok(query) => {
+                println!("Accepting query {:?}", query);
+            },
+            Err(e) => {
+                println!("Cannot parse json query \"{}\", reason: {:?}", str_line, e);
+            }
         }
         println!("Query >");
     }
