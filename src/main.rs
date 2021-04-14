@@ -1,9 +1,11 @@
 use kmeans::{KMeans, KMeansConfig, KMeansState};
 use memchr::{memchr_iter, Memchr};
 use memmap2::*;
+use minilp::{ComparisonOp, LinearExpr, OptimizationDirection, Problem};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Result;
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{self, BufRead};
@@ -16,8 +18,8 @@ enum QueryObjective {
 
 #[derive(Serialize, Deserialize, Debug)]
 enum QueryConstrainComp {
-    Less(f32),
-    Greater(f32),
+    // Does not support lesser and greater
+    Eq(f32),
     LessEq(f32),
     GreatEq(f32),
 }
@@ -86,6 +88,11 @@ fn main() {
     let first_line = lines.next().unwrap();
     println!("Found first line at {}", first_line);
     let headers = read_line(&mapped, 0, first_line);
+    let header_index = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.to_owned(), i.to_string()))
+        .collect::<HashMap<_, _>>();
     println!("Found header {:?}", headers);
     println!("Read all data into memory for clustering");
     let num_cols = headers.len();
@@ -107,7 +114,8 @@ fn main() {
         centroids.len(),
         k
     );
-    println!("Query >");
+    let mut query_id = 1;
+    println!("Query [{}] >", query_id);
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let str_line = line.unwrap();
@@ -115,12 +123,75 @@ fn main() {
         match query_res {
             Ok(query) => {
                 println!("Accepting query {:?}", query);
-            },
+                run_query(&query, &centroids, &header_index);
+            }
             Err(e) => {
                 println!("Cannot parse json query \"{}\", reason: {:?}", str_line, e);
             }
         }
-        println!("Query >");
+        query_id += 1;
+        println!("Query [{}] >", query_id);
+    }
+}
+
+fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<&String, usize>) {
+    let obj_field;
+    let mut problem = match &query.obj {
+        QueryObjective::Maximize(v) => {
+            obj_field = v;
+            Problem::new(OptimizationDirection::Maximize)
+        }
+        QueryObjective::Minimize(v) => {
+            obj_field = v;
+            Problem::new(OptimizationDirection::Minimize)
+        }
+    };
+    let vars = centroids
+        .iter()
+        .map(|row| {
+            // Obtain boundary for rows
+            let max = row.iter().max_by(|x, y| x.partial_cmp(y).unwrap()).unwrap();
+            let min = row.iter().min_by(|x, y| x.partial_cmp(y).unwrap()).unwrap();
+            problem.add_var(1.0, (*min as f64, *max as f64))
+        })
+        .enumerate()
+        .collect::<Vec<_>>();
+    query.cons.iter().for_each(|c| match c {
+        QueryConstrain::Sum(expr) => {
+            if let Some(index) = headers.get(&expr.attr) {
+                let mut lhs = LinearExpr::empty();
+                vars.iter().for_each(|(row, v)| {
+                    lhs.add(*v, centroids[*row][*index] as f64);
+                });
+                let rhs;
+                let comp_op = match &expr.comp {
+                    QueryConstrainComp::LessEq(r) => {
+                        rhs = *r;
+                        ComparisonOp::Le
+                    }
+                    QueryConstrainComp::GreatEq(r) => {
+                        rhs = *r;
+                        ComparisonOp::Ge
+                    }
+                    QueryConstrainComp::Eq(r) => {
+                        rhs = *r;
+                        ComparisonOp::Eq
+                    }
+                };
+                problem.add_constraint(lhs, comp_op, rhs as f64);
+            } else {
+                println!("Cannot find field \"{}\"", expr.attr);
+            }
+        }
+        QueryConstrain::Count(count) => {}
+    });
+    match problem.solve() {
+        Ok(solution) => {
+            unimplemented!()
+        }
+        Err(err) => { 
+            println!("Cannot solve the linear programming problem");
+         }
     }
 }
 
