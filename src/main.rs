@@ -31,15 +31,9 @@ struct QueryConstrainExpr {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct QueryConstrainCount {
-    comp: QueryConstrainComp,
-    val: f32,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
 enum QueryConstrain {
     Sum(QueryConstrainExpr),
-    Count(QueryConstrainCount),
+    Count(QueryConstrainComp),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -91,7 +85,7 @@ fn main() {
     let header_index = headers
         .iter()
         .enumerate()
-        .map(|(i, h)| (h.to_owned(), i.to_string()))
+        .map(|(i, h)| (h.to_string(), i))
         .collect::<HashMap<_, _>>();
     println!("Found header {:?}", headers);
     println!("Read all data into memory for clustering");
@@ -134,7 +128,7 @@ fn main() {
     }
 }
 
-fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<&String, usize>) {
+fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usize>) {
     let obj_field;
     let mut problem = match &query.obj {
         QueryObjective::Maximize(v) => {
@@ -163,35 +157,28 @@ fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<&String, 
                 vars.iter().for_each(|(row, v)| {
                     lhs.add(*v, centroids[*row][*index] as f64);
                 });
-                let rhs;
-                let comp_op = match &expr.comp {
-                    QueryConstrainComp::LessEq(r) => {
-                        rhs = *r;
-                        ComparisonOp::Le
-                    }
-                    QueryConstrainComp::GreatEq(r) => {
-                        rhs = *r;
-                        ComparisonOp::Ge
-                    }
-                    QueryConstrainComp::Eq(r) => {
-                        rhs = *r;
-                        ComparisonOp::Eq
-                    }
-                };
+                let (comp_op, rhs) = expr.comp.to_solver_op();
                 problem.add_constraint(lhs, comp_op, rhs as f64);
             } else {
                 println!("Cannot find field \"{}\"", expr.attr);
             }
         }
-        QueryConstrain::Count(count) => {}
+        QueryConstrain::Count(count) => {
+            let mut lhs = LinearExpr::empty();
+            vars.iter().for_each(|(_row, v)| {
+                lhs.add(*v, 1.0f64);
+            });
+            let (comp_op, rhs) = count.to_solver_op();
+            problem.add_constraint(lhs, comp_op, rhs as f64);
+        }
     });
     match problem.solve() {
         Ok(solution) => {
             unimplemented!()
         }
-        Err(err) => { 
-            println!("Cannot solve the linear programming problem");
-         }
+        Err(err) => {
+            println!("Cannot solve the linear programming problem: {:?}", err);
+        }
     }
 }
 
@@ -257,4 +244,25 @@ fn read_all_data(mem: &Mmap, lines: Memchr, start: usize, num_cols: usize) -> Da
         .flatten()
         .collect();
     DataSet::new(buffer, num_cols)
+}
+
+impl QueryConstrainComp {
+    fn to_solver_op(&self) -> (ComparisonOp, f32) {
+        let rhs;
+        let comp_op = match self {
+            QueryConstrainComp::LessEq(r) => {
+                rhs = *r;
+                ComparisonOp::Le
+            }
+            QueryConstrainComp::GreatEq(r) => {
+                rhs = *r;
+                ComparisonOp::Ge
+            }
+            QueryConstrainComp::Eq(r) => {
+                rhs = *r;
+                ComparisonOp::Eq
+            }
+        };
+        (comp_op, rhs)
+    }
 }
