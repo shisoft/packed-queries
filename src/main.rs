@@ -140,13 +140,18 @@ fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, u
             Problem::new(OptimizationDirection::Minimize)
         }
     };
+    let obj_field_idx = if let Some(idx) = headers.get(obj_field) {
+        *idx
+    } else {
+        println!("Cannot find objective field '{}'", obj_field);
+        return;
+    };
     let vars = centroids
         .iter()
         .map(|row| {
-            // Obtain boundary for rows
-            let max = row.iter().max_by(|x, y| x.partial_cmp(y).unwrap()).unwrap();
-            let min = row.iter().min_by(|x, y| x.partial_cmp(y).unwrap()).unwrap();
-            problem.add_var(1.0, (*min as f64, *max as f64))
+            let coefficient = row[obj_field_idx] as f64;
+            let boundaries = (f64::NEG_INFINITY, f64::INFINITY);
+            problem.add_var(coefficient, boundaries) // TODO: Refine this
         })
         .enumerate()
         .collect::<Vec<_>>();
