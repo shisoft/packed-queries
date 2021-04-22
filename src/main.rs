@@ -1,7 +1,7 @@
 use kmeans::{KMeans, KMeansConfig, KMeansState};
 use memchr::{memchr_iter, Memchr};
 use memmap2::*;
-use minilp::{ComparisonOp, LinearExpr, OptimizationDirection, Problem};
+use minilp::{ComparisonOp, LinearExpr, OptimizationDirection, Problem, Solution};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use json5;
@@ -40,6 +40,7 @@ enum QueryConstrain {
 struct Query {
     obj: QueryObjective,
     cons: Vec<QueryConstrain>,
+    repeat_0: bool
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -129,6 +130,13 @@ fn main() {
 }
 
 fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usize>) {
+    if let Some(solution) = sketch(query, centroids, headers) {
+        let objective_sum = solution.objective();
+
+    }
+}
+
+fn sketch(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usize>) -> Option<Solution> {
     let obj_field;
     let mut problem = match &query.obj {
         QueryObjective::Maximize(v) => {
@@ -144,7 +152,7 @@ fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, u
         *idx
     } else {
         println!("Cannot find objective field '{}'", obj_field);
-        return;
+        return None;
     };
     let vars = centroids
         .iter()
@@ -177,12 +185,20 @@ fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, u
             problem.add_constraint(lhs, comp_op, rhs as f64);
         }
     });
+    if query.repeat_0 {
+        vars.iter().for_each(|(_row, v)| {
+            let mut lhs = LinearExpr::empty();
+            lhs.add(*v, 1.0f64);
+            problem.add_constraint(lhs, ComparisonOp::Le, 1.0);
+        });
+    }
     match problem.solve() {
         Ok(solution) => {
-            unimplemented!()
+            Some(solution)
         }
         Err(err) => {
             println!("Cannot solve the linear programming problem: {:?}", err);
+            None
         }
     }
 }
