@@ -116,9 +116,9 @@ fn main() {
         .iter()
         .enumerate()
         .map(|(i, c)| (c, i))
-        .group_by(|(c, _)| c)
+        .group_by(|(c, _)| **c)
         .into_iter()
-        .map(|(c, i)| (**c, i.map(|(_, i)| i).collect::<Vec<_>>()))
+        .map(|(c, i)| (c, i.map(|(_, i)| i).collect::<Vec<_>>()))
         .collect::<HashMap<_, _>>();
     let mut query_id = 1;
     println!("Query [{}] >", query_id);
