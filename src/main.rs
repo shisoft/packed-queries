@@ -1,10 +1,10 @@
+use json5;
 use kmeans::{KMeans, KMeansConfig, KMeansState};
 use memchr::{memchr_iter, Memchr};
 use memmap2::*;
-use minilp::{ComparisonOp, LinearExpr, OptimizationDirection, Problem, Solution};
+use minilp::{ComparisonOp, LinearExpr, OptimizationDirection, Problem, Solution, Variable};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use json5;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -40,7 +40,7 @@ enum QueryConstrain {
 struct Query {
     obj: QueryObjective,
     cons: Vec<QueryConstrain>,
-    repeat_0: bool
+    repeat_0: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -130,13 +130,28 @@ fn main() {
 }
 
 fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usize>) {
-    if let Some(solution) = sketch(query, centroids, headers) {
+    if let Some((solution, vars)) = sketch(query, centroids, headers) {
         let objective_sum = solution.objective();
-
+        let var_map = vars
+            .iter()
+            .map(|(cluster, var)| (var, cluster))
+            .collect::<HashMap<_, _>>();
+        let cluster_val = solution
+            .iter()
+            .map(|(var, func_val)| {
+                let cluster_id = var_map[&var];
+                (cluster_id, func_val)
+            })
+            .collect::<HashMap<_, _>>();
+        
     }
 }
 
-fn sketch(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usize>) -> Option<Solution> {
+fn sketch(
+    query: &Query,
+    tuples: &Vec<&[f32]>,
+    headers: &HashMap<String, usize>,
+) -> Option<(Solution, Vec<(usize, Variable)>)> {
     let obj_field;
     let mut problem = match &query.obj {
         QueryObjective::Maximize(v) => {
@@ -154,7 +169,7 @@ fn sketch(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usiz
         println!("Cannot find objective field '{}'", obj_field);
         return None;
     };
-    let vars = centroids
+    let vars = tuples
         .iter()
         .map(|row| {
             let coefficient = row[obj_field_idx] as f64;
@@ -163,15 +178,20 @@ fn sketch(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usiz
         })
         .enumerate()
         .collect::<Vec<_>>();
+    let mut cons_vals = vec![];
     query.cons.iter().for_each(|c| match c {
         QueryConstrain::Sum(expr) => {
             if let Some(index) = headers.get(&expr.attr) {
                 let mut lhs = LinearExpr::empty();
+                let mut sum_cof = 0.0;
                 vars.iter().for_each(|(row, v)| {
-                    lhs.add(*v, centroids[*row][*index] as f64);
+                    let cof = tuples[*row][*index];
+                    sum_cof += cof;
+                    lhs.add(*v, cof as f64);
                 });
                 let (comp_op, rhs) = expr.comp.to_solver_op();
                 problem.add_constraint(lhs, comp_op, rhs as f64);
+                cons_vals.push(sum_cof);
             } else {
                 println!("Cannot find field \"{}\"", expr.attr);
             }
@@ -193,9 +213,7 @@ fn sketch(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usiz
         });
     }
     match problem.solve() {
-        Ok(solution) => {
-            Some(solution)
-        }
+        Ok(solution) => Some((solution, vars)),
         Err(err) => {
             println!("Cannot solve the linear programming problem: {:?}", err);
             None
