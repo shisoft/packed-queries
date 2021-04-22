@@ -12,3 +12,5 @@ memchr = "2.3.4"
 rayon = "1.5.0"
 serde = { version = "1", features = ["derive"] }
 json5 = "0.3.0"
+itertools = "0.10"
+rand = "0.8"

@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
-use std::io::{self, BufRead};
+use std::io::{BufRead};
+use itertools::Itertools;
+use rand::prelude::*;
 
 #[derive(Serialize, Deserialize, Debug)]
 enum QueryObjective {
@@ -109,6 +111,15 @@ fn main() {
         centroids.len(),
         k
     );
+    assert_eq!(clusters.assignments.len(), data.rows);
+    let cluster_rows = clusters.assignments
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c, i))
+        .group_by(|(c, _)| c)
+        .into_iter()
+        .map(|(c, i)| (**c, i.map(|(_, i)| i).collect::<Vec<_>>()))
+        .collect::<HashMap<_, _>>();
     let mut query_id = 1;
     println!("Query [{}] >", query_id);
     let stdin = std::io::stdin();
@@ -118,7 +129,7 @@ fn main() {
         match query_res {
             Ok(query) => {
                 println!("Accepting query {:?}", query);
-                run_query(&query, &centroids, &header_index);
+                run_query(&data, &query, &centroids, &header_index, &cluster_rows);
             }
             Err(e) => {
                 println!("Cannot parse json query \"{}\", reason: {:?}", str_line, e);
@@ -129,21 +140,40 @@ fn main() {
     }
 }
 
-fn run_query(query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usize>) {
-    if let Some((solution, vars)) = sketch(query, centroids, headers) {
-        let objective_sum = solution.objective();
-        let var_map = vars
-            .iter()
-            .map(|(cluster, var)| (var, cluster))
-            .collect::<HashMap<_, _>>();
-        let cluster_val = solution
-            .iter()
-            .map(|(var, func_val)| {
-                let cluster_id = var_map[&var];
-                (cluster_id, func_val)
-            })
-            .collect::<HashMap<_, _>>();
-        
+fn run_query(data: &DataSet, query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usize>, cluster_rows: &HashMap<usize, Vec<usize>>) {
+    if let Some((mut solution, vars)) = sketch(query, centroids, headers) {
+        let mut rand = thread_rng();
+        loop {
+            let objective_sum = solution.objective();
+            let var_map = vars
+                .iter()
+                .map(|(cluster, var)| (var, cluster))
+                .collect::<HashMap<_, _>>();
+            let cluster_val = solution
+                .iter()
+                .map(|(var, func_val)| {
+                    let cluster_id = var_map[&var];
+                    (cluster_id, func_val)
+                })
+                .collect::<HashMap<_, _>>();
+            // Find cluster value to fix
+            if let Some(cluster_id) = cluster_val
+                .iter()
+                .filter(|(_, val)| ***val != 1.0)
+                .map(|(id, _)| *id)
+                .next()
+            {
+                let row = {
+                    let cluster_rows = &cluster_rows[cluster_id];
+                    let row_id = rand.gen_range(0..cluster_rows.len());
+                    let candidate_row = &cluster_rows[row_id];
+                    data.row(*candidate_row)
+                };
+            } else {
+                // All values are 1.0, exit refine phase
+                break;
+            }
+        }
     }
 }
 
