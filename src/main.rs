@@ -148,20 +148,45 @@ fn run_query(
     headers: &HashMap<String, usize>,
     cluster_rows: &HashMap<usize, Vec<usize>>,
 ) {
-    if let Some((mut solution, vars)) = sketch(query, centroids, headers) {
+    if let Some((solution, _vars)) = sketch(query, centroids, headers) {
         let mut rand = thread_rng();
-        let candidate_sum = vec![0; centroids[0].len()];
-        let selected_variable = solution.iter().enumerate().filter(|(i, (var, val))| **val >= 1.0).collect::<Vec<_>>();
-        let mut candidates = selected_variable.iter().map(|(cluster, (var, _))| {
-            (cluster, var, cluster_rows[cluster].iter().map(|row_id| data.row(*row_id)).collect::<Vec<_>>())
-        })
-        .collect::<Vec<_>>();
+        let selected_variable = solution
+            .iter()
+            .enumerate()
+            .filter(|(_i, (_var, val))| **val >= 1.0)
+            .collect::<Vec<_>>();
+        let mut candidates = selected_variable
+            .iter()
+            .map(|(cluster, (var, _))| {
+                (
+                    cluster,
+                    var,
+                    cluster_rows[cluster]
+                        .iter()
+                        .map(|row_id| data.row(*row_id))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
         candidates.shuffle(&mut rand);
         let mut result_set = vec![];
-        while let Some((cluster_id, var, picked_rows)) = candidates.pop() {
-            if let Some((solution, vars)) = refine(query, centroids,&candidates, *cluster_id, &picked_rows, &result_set, headers) {
+        while let Some((cluster_id, _var, picked_rows)) = candidates.pop() {
+            if let Some((solution, vars)) = refine(
+                query,
+                centroids,
+                &candidates,
+                *cluster_id,
+                &picked_rows,
+                &result_set,
+                headers,
+            ) {
                 // All the variables == 0.0, backtrack, do cluster_id first
-                if let Some((var, val)) = solution.iter().filter(|(var, val)| **val >= 1.0).collect::<Vec<_>>().get(0) {
+                if let Some((var, _val)) = solution
+                    .iter()
+                    .filter(|(_var, val)| **val >= 1.0)
+                    .collect::<Vec<_>>()
+                    .get(0)
+                {
                     let picked_row = picked_rows[vars[var]];
                     result_set.push(picked_row);
                 } else {
@@ -171,31 +196,6 @@ fn run_query(
                 return;
             }
         }
-        // loop {
-        //     let var_map = vars
-        //         .iter()
-        //         .map(|(cluster, var)| (var, cluster))
-        //         .collect::<HashMap<_, _>>();
-        //     let cluster_val = solution
-        //         .iter()
-        //         .map(|(var, func_val)| {
-        //             let cluster_id = var_map[&var];
-        //             (cluster_id, func_val)
-        //         })
-        //         .collect::<HashMap<_, _>>();
-        //     let non_zero_clusters = cluster_val.iter().filter(|(_, v)| ***v > 0.0).collect_vec();
-        //     let picked_cluster = non_zero_clusters[rand.gen_range(0..non_zero_clusters.len())];
-        //     let picked_cluster_rows = cluster_rows
-        //         .get(picked_cluster.0)
-        //         .unwrap()
-        //         .iter()
-        //         .map(|row_id| data.row(*row_id))
-        //         .collect::<Vec<_>>();
-            
-
-
-        //     candidate_sum += 
-        // }
     }
 }
 
@@ -203,7 +203,7 @@ fn refine(
     query: &Query,
     centroids: &Vec<&[f32]>,
     candidates: &Vec<(&usize, &Variable, Vec<&[f32]>)>,
-    picked_cluster: usize,
+    _picked_cluster: usize,
     picked_rows: &Vec<&[f32]>,
     result_set: &Vec<&[f32]>,
     headers: &HashMap<String, usize>,
@@ -247,7 +247,7 @@ fn refine(
                     lhs.add(*v, cof as f64);
                 });
                 let (comp_op, mut rhs) = expr.comp.to_solver_op();
-                candidates.iter().for_each(|(cluster_id,_ ,_)| {
+                candidates.iter().for_each(|(cluster_id, _, _)| {
                     let row = centroids[**cluster_id];
                     rhs -= row[*index];
                 });
@@ -266,7 +266,12 @@ fn refine(
                 lhs.add(*v, 1.0f64);
             });
             let (comp_op, mut rhs) = count.to_solver_op();
-
+            candidates.iter().for_each(|_| {
+                rhs -= 1.0;
+            });
+            result_set.iter().for_each(|_| {
+                rhs -= 1.0;
+            });
             problem.add_constraint(lhs, comp_op, rhs as f64);
         }
     });
@@ -280,7 +285,10 @@ fn refine(
     match problem.solve() {
         Ok(solution) => Some((solution, vars)),
         Err(err) => {
-            println!("Cannot solve the linear programming problem in the refine phase: {:?}", err);
+            println!(
+                "Cannot solve the linear programming problem in the refine phase: {:?}",
+                err
+            );
             None
         }
     }
