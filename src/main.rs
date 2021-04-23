@@ -181,14 +181,18 @@ fn run_query(
                 headers,
             ) {
                 // All the variables == 0.0, backtrack, do cluster_id first
+                if solution.iter().all(|(_, val)| *val == 0.0) {
+                    panic!("BACKTRACK");
+                }
                 if let Some((var, _val)) = solution
                     .iter()
                     .filter(|(_var, val)| **val >= 1.0)
                     .collect::<Vec<_>>()
                     .get(0)
                 {
-                    let picked_row = picked_rows[vars[var]];
-                    result_set.push(picked_row);
+                    let picked_row_id = vars[var];
+                    let picked_row = picked_rows[picked_row_id];
+                    result_set.push((picked_row_id, picked_row));
                 } else {
                     break;
                 }
@@ -196,6 +200,17 @@ fn run_query(
                 return;
             }
         }
+        print!("Result: {} rows", result_set.len());
+        headers.iter().for_each(|(s, _)| print!("|{}\t", s));
+        headers.iter().for_each(|_| println!("|"));
+        headers.iter().for_each(|_| print!("+\t"));
+        headers.iter().for_each(|_| println!("+"));
+        result_set.iter().for_each(|(_row_id, row)| {
+            row.iter().for_each(|val| {
+                print!("|{}\t", val);
+            });
+            println!("|");
+        });
     }
 }
 
@@ -205,7 +220,7 @@ fn refine(
     candidates: &Vec<(&usize, &Variable, Vec<&[f32]>)>,
     _picked_cluster: usize,
     picked_rows: &Vec<&[f32]>,
-    result_set: &Vec<&[f32]>,
+    result_set: &Vec<(usize, &[f32])>,
     headers: &HashMap<String, usize>,
 ) -> Option<(Solution, HashMap<Variable, usize>)> {
     let obj_field;
@@ -251,7 +266,7 @@ fn refine(
                     let row = centroids[**cluster_id];
                     rhs -= row[*index];
                 });
-                result_set.iter().for_each(|row| {
+                result_set.iter().for_each(|(_, row)| {
                     rhs -= row[*index];
                 });
                 problem.add_constraint(lhs, comp_op, rhs as f64);
