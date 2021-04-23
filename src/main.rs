@@ -1,16 +1,16 @@
+use itertools::Itertools;
 use json5;
 use kmeans::{KMeans, KMeansConfig, KMeansState};
 use memchr::{memchr_iter, Memchr};
 use memmap2::*;
 use minilp::{ComparisonOp, LinearExpr, OptimizationDirection, Problem, Solution, Variable};
+use rand::prelude::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
-use std::io::{BufRead};
-use itertools::Itertools;
-use rand::prelude::*;
+use std::io::BufRead;
 
 #[derive(Serialize, Deserialize, Debug)]
 enum QueryObjective {
@@ -112,7 +112,8 @@ fn main() {
         k
     );
     assert_eq!(clusters.assignments.len(), data.rows);
-    let cluster_rows = clusters.assignments
+    let cluster_rows = clusters
+        .assignments
         .iter()
         .enumerate()
         .map(|(i, c)| (c, i))
@@ -140,39 +141,147 @@ fn main() {
     }
 }
 
-fn run_query(data: &DataSet, query: &Query, centroids: &Vec<&[f32]>, headers: &HashMap<String, usize>, cluster_rows: &HashMap<usize, Vec<usize>>) {
+fn run_query(
+    data: &DataSet,
+    query: &Query,
+    centroids: &Vec<&[f32]>,
+    headers: &HashMap<String, usize>,
+    cluster_rows: &HashMap<usize, Vec<usize>>,
+) {
     if let Some((mut solution, vars)) = sketch(query, centroids, headers) {
         let mut rand = thread_rng();
-        loop {
-            let objective_sum = solution.objective();
-            let var_map = vars
-                .iter()
-                .map(|(cluster, var)| (var, cluster))
-                .collect::<HashMap<_, _>>();
-            let cluster_val = solution
-                .iter()
-                .map(|(var, func_val)| {
-                    let cluster_id = var_map[&var];
-                    (cluster_id, func_val)
-                })
-                .collect::<HashMap<_, _>>();
-            // Find cluster value to fix
-            if let Some(cluster_id) = cluster_val
-                .iter()
-                .filter(|(_, val)| ***val != 1.0)
-                .map(|(id, _)| *id)
-                .next()
-            {
-                let row = {
-                    let cluster_rows = &cluster_rows[cluster_id];
-                    let row_id = rand.gen_range(0..cluster_rows.len());
-                    let candidate_row = &cluster_rows[row_id];
-                    data.row(*candidate_row)
-                };
+        let candidate_sum = vec![0; centroids[0].len()];
+        let selected_variable = solution.iter().enumerate().filter(|(i, (var, val))| **val >= 1.0).collect::<Vec<_>>();
+        let mut candidates = selected_variable.iter().map(|(cluster, (var, _))| {
+            (cluster, var, cluster_rows[cluster].iter().map(|row_id| data.row(*row_id)).collect::<Vec<_>>())
+        })
+        .collect::<Vec<_>>();
+        candidates.shuffle(&mut rand);
+        let mut result_set = vec![];
+        while let Some((cluster_id, var, picked_rows)) = candidates.pop() {
+            if let Some((solution, vars)) = refine(query, centroids,&candidates, *cluster_id, &picked_rows, &result_set, headers) {
+                // All the variables == 0.0, backtrack, do cluster_id first
+                if let Some((var, val)) = solution.iter().filter(|(var, val)| **val >= 1.0).collect::<Vec<_>>().get(0) {
+                    let picked_row = picked_rows[vars[var]];
+                    result_set.push(picked_row);
+                } else {
+                    break;
+                }
             } else {
-                // All values are 1.0, exit refine phase
-                break;
+                return;
             }
+        }
+        // loop {
+        //     let var_map = vars
+        //         .iter()
+        //         .map(|(cluster, var)| (var, cluster))
+        //         .collect::<HashMap<_, _>>();
+        //     let cluster_val = solution
+        //         .iter()
+        //         .map(|(var, func_val)| {
+        //             let cluster_id = var_map[&var];
+        //             (cluster_id, func_val)
+        //         })
+        //         .collect::<HashMap<_, _>>();
+        //     let non_zero_clusters = cluster_val.iter().filter(|(_, v)| ***v > 0.0).collect_vec();
+        //     let picked_cluster = non_zero_clusters[rand.gen_range(0..non_zero_clusters.len())];
+        //     let picked_cluster_rows = cluster_rows
+        //         .get(picked_cluster.0)
+        //         .unwrap()
+        //         .iter()
+        //         .map(|row_id| data.row(*row_id))
+        //         .collect::<Vec<_>>();
+            
+
+
+        //     candidate_sum += 
+        // }
+    }
+}
+
+fn refine(
+    query: &Query,
+    centroids: &Vec<&[f32]>,
+    candidates: &Vec<(&usize, &Variable, Vec<&[f32]>)>,
+    picked_cluster: usize,
+    picked_rows: &Vec<&[f32]>,
+    result_set: &Vec<&[f32]>,
+    headers: &HashMap<String, usize>,
+) -> Option<(Solution, HashMap<Variable, usize>)> {
+    let obj_field;
+    let mut problem = match &query.obj {
+        QueryObjective::Maximize(v) => {
+            obj_field = v;
+            Problem::new(OptimizationDirection::Maximize)
+        }
+        QueryObjective::Minimize(v) => {
+            obj_field = v;
+            Problem::new(OptimizationDirection::Minimize)
+        }
+    };
+    let obj_field_idx = if let Some(idx) = headers.get(obj_field) {
+        *idx
+    } else {
+        println!("Cannot find objective field '{}'", obj_field);
+        return None;
+    };
+    let vars = picked_rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| {
+            let coefficient = row[obj_field_idx] as f64;
+            let boundaries = (f64::NEG_INFINITY, f64::INFINITY);
+            Some((problem.add_var(coefficient, boundaries), i))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut cons_vals = vec![];
+
+    query.cons.iter().for_each(|c| match c {
+        QueryConstrain::Sum(expr) => {
+            if let Some(index) = headers.get(&expr.attr) {
+                let mut lhs = LinearExpr::empty();
+                let mut sum_cof = 0.0;
+                vars.iter().for_each(|(v, row)| {
+                    let cof = picked_rows[*row][*index];
+                    sum_cof += cof;
+                    lhs.add(*v, cof as f64);
+                });
+                let (comp_op, mut rhs) = expr.comp.to_solver_op();
+                candidates.iter().for_each(|(cluster_id,_ ,_)| {
+                    let row = centroids[**cluster_id];
+                    rhs -= row[*index];
+                });
+                result_set.iter().for_each(|row| {
+                    rhs -= row[*index];
+                });
+                problem.add_constraint(lhs, comp_op, rhs as f64);
+                cons_vals.push(sum_cof);
+            } else {
+                println!("Cannot find field \"{}\"", expr.attr);
+            }
+        }
+        QueryConstrain::Count(count) => {
+            let mut lhs = LinearExpr::empty();
+            vars.iter().for_each(|(v, _row)| {
+                lhs.add(*v, 1.0f64);
+            });
+            let (comp_op, mut rhs) = count.to_solver_op();
+
+            problem.add_constraint(lhs, comp_op, rhs as f64);
+        }
+    });
+    if query.repeat_0 {
+        vars.iter().for_each(|(v, _row)| {
+            let mut lhs = LinearExpr::empty();
+            lhs.add(*v, 1.0f64);
+            problem.add_constraint(lhs, ComparisonOp::Le, 1.0);
+        });
+    }
+    match problem.solve() {
+        Ok(solution) => Some((solution, vars)),
+        Err(err) => {
+            println!("Cannot solve the linear programming problem in the refine phase: {:?}", err);
+            None
         }
     }
 }
