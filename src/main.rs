@@ -428,9 +428,10 @@ fn str_line_to_num_line(line_str: Vec<&str>) -> Vec<f32> {
     line_str
         .iter()
         .map(|str| {
-            str.trim()
-                .parse()
-                .expect(&format!("Error on parsing {}, line {:?}", str, line_str))
+            match str.trim().parse() {
+                Ok(num) => num,
+                Err(e) => panic!("Error '{:?}' on parsing {}, line {:?}", e, str, line_str)
+            }
         })
         .collect()
 }
