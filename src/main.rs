@@ -22,8 +22,8 @@ enum QueryObjective {
 enum QueryConstrainComp {
     // Does not support lesser and greater
     Eq(f32),
-    LessEq(f32),
-    GreatEq(f32),
+    LE(f32),
+    GE(f32),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -98,7 +98,7 @@ fn main() {
         "Read total of {} row of data, preparing clustering data",
         data.rows
     );
-    let k = 64;
+    let k = 4096;
     let clusters = clustering(&data, k);
     let centroids = clusters
         .centroids
@@ -112,15 +112,20 @@ fn main() {
         k
     );
     assert_eq!(clusters.assignments.len(), data.rows);
-    let cluster_rows = clusters
-        .assignments
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c, i))
-        .group_by(|(c, _)| **c)
-        .into_iter()
-        .map(|(c, i)| (c, i.map(|(_, i)| i).collect::<Vec<_>>()))
-        .collect::<HashMap<_, _>>();
+    let mut cluster_rows = HashMap::new();
+    clusters.assignments.iter().enumerate().for_each(|(i, c)| {
+        cluster_rows
+            .entry(*c)
+            .or_insert_with(|| vec![])
+            .push(i);
+    });
+    // println!(
+    //     "Clusters: {:?}",
+    //     cluster_rows
+    //         .iter()
+    //         .map(|(c, r)| format!("{}: {}", c, r.len()))
+    //         .collect::<Vec<_>>()
+    // );
     let mut query_id = 1;
     println!("Query [{}] >", query_id);
     let stdin = std::io::stdin();
@@ -170,6 +175,7 @@ fn run_query(
             .collect::<Vec<_>>();
         candidates.shuffle(&mut rand);
         let mut result_set = vec![];
+        let mut iter_num = 0;
         while let Some((cluster_id, _var, picked_rows)) = candidates.pop() {
             if let Some((solution, vars)) = refine(
                 query,
@@ -180,6 +186,8 @@ fn run_query(
                 &result_set,
                 headers,
             ) {
+                println!("Iter {}, solution {:?}", iter_num, solution);
+                iter_num += 1;
                 // All the variables == 0.0, backtrack, do cluster_id first
                 if solution.iter().all(|(_, val)| *val == 0.0) {
                     panic!("BACKTRACK");
@@ -200,11 +208,9 @@ fn run_query(
                 return;
             }
         }
-        print!("Result: {} rows", result_set.len());
+        println!("Result: {} rows", result_set.len());
         headers.iter().for_each(|(s, _)| print!("|{}\t", s));
-        headers.iter().for_each(|_| println!("|"));
-        headers.iter().for_each(|_| print!("+\t"));
-        headers.iter().for_each(|_| println!("+"));
+        println!("|");
         result_set.iter().for_each(|(_row_id, row)| {
             row.iter().for_each(|val| {
                 print!("|{}\t", val);
@@ -240,6 +246,7 @@ fn refine(
         println!("Cannot find objective field '{}'", obj_field);
         return None;
     };
+    println!("Picked {} rows", picked_rows.len());
     let vars = picked_rows
         .iter()
         .enumerate()
@@ -249,8 +256,8 @@ fn refine(
             Some((problem.add_var(coefficient, boundaries), i))
         })
         .collect::<HashMap<_, _>>();
-    let mut cons_vals = vec![];
 
+    let mut cons_vals = vec![];
     query.cons.iter().for_each(|c| match c {
         QueryConstrain::Sum(expr) => {
             if let Some(index) = headers.get(&expr.attr) {
@@ -281,12 +288,12 @@ fn refine(
                 lhs.add(*v, 1.0f64);
             });
             let (comp_op, mut rhs) = count.to_solver_op();
-            candidates.iter().for_each(|_| {
-                rhs -= 1.0;
-            });
-            result_set.iter().for_each(|_| {
-                rhs -= 1.0;
-            });
+            // candidates.iter().for_each(|_| {
+            //     rhs -= 1.0;
+            // });
+            // result_set.iter().for_each(|_| {
+            //     rhs -= 1.0;
+            // });
             problem.add_constraint(lhs, comp_op, rhs as f64);
         }
     });
@@ -377,7 +384,10 @@ fn sketch(
     match problem.solve() {
         Ok(solution) => Some((solution, vars)),
         Err(err) => {
-            println!("Cannot solve the linear programming problem: {:?}", err);
+            println!(
+                "Cannot solve the linear programming problem in sketch phase: {:?}",
+                err
+            );
             None
         }
     }
@@ -389,8 +399,11 @@ fn clustering(data: &DataSet, k: usize) -> KMeansState<f32> {
     let data_clone = data.buffer.clone();
     // Calculate kmeans, using kmean++ as initialization-method
     println!(
-        "Clustering with k: {}, iter: {}, dim {}",
-        k, iter, data.num_cols
+        "Clustering with k: {}, iter: {}, dim {}, size {}",
+        k,
+        iter,
+        data.num_cols,
+        data_clone.len()
     );
     let kmean = KMeans::new(data_clone, sample_cnt, sample_dims);
     let result = kmean.kmeans_minibatch(
@@ -451,11 +464,11 @@ impl QueryConstrainComp {
     fn to_solver_op(&self) -> (ComparisonOp, f32) {
         let rhs;
         let comp_op = match self {
-            QueryConstrainComp::LessEq(r) => {
+            QueryConstrainComp::LE(r) => {
                 rhs = *r;
                 ComparisonOp::Le
             }
-            QueryConstrainComp::GreatEq(r) => {
+            QueryConstrainComp::GE(r) => {
                 rhs = *r;
                 ComparisonOp::Ge
             }
