@@ -394,7 +394,7 @@ fn sketch(
 }
 
 fn clustering(data: &DataSet, k: usize) -> KMeansState<f32> {
-    let iter = 100;
+    let iter = 50;
     let (sample_cnt, sample_dims, k, max_iter) = (data.rows, data.num_cols, k, iter);
     let data_clone = data.buffer.clone();
     // Calculate kmeans, using kmean++ as initialization-method
