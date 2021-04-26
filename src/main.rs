@@ -98,7 +98,7 @@ fn main() {
         "Read total of {} row of data, preparing clustering data",
         data.rows
     );
-    let k = 4096;
+    let k = 256;
     let clusters = clustering(&data, k);
     let centroids = clusters
         .centroids
@@ -114,10 +114,7 @@ fn main() {
     assert_eq!(clusters.assignments.len(), data.rows);
     let mut cluster_rows = HashMap::new();
     clusters.assignments.iter().enumerate().for_each(|(i, c)| {
-        cluster_rows
-            .entry(*c)
-            .or_insert_with(|| vec![])
-            .push(i);
+        cluster_rows.entry(*c).or_insert_with(|| vec![]).push(i);
     });
     // println!(
     //     "Clusters: {:?}",
@@ -153,11 +150,18 @@ fn run_query(
     headers: &HashMap<String, usize>,
     cluster_rows: &HashMap<usize, Vec<usize>>,
 ) {
+    // println!("Centroids: {:?}", centroids);
     if let Some((solution, _vars)) = sketch(query, centroids, headers) {
+        // println!("Sketch solution: {:?}", solution);
         let mut rand = thread_rng();
         let selected_variable = solution
             .iter()
             .enumerate()
+            .map(|tuple| {
+                let (_, (var, val)) = tuple;
+                assert!(*val >= 0.0, "Variable is negative {:?} = {}", var, val);
+                tuple
+            })
             .filter(|(_i, (_var, val))| **val >= 1.0)
             .collect::<Vec<_>>();
         let mut candidates = selected_variable
@@ -173,6 +177,15 @@ fn run_query(
                 )
             })
             .collect::<Vec<_>>();
+        println!("Have {} candidates", candidates.len());
+        // {
+        //     let column_id = headers.get(&"sum_base_price".to_string()).unwrap();
+        //     let mut sum = 0.0;
+        //     selected_variable
+        //         .iter()
+        //         .for_each(|(c, _)| sum += centroids[*c][*column_id]);
+        //     println!("Sum of sum_base_price {:?}", sum);
+        // }
         candidates.shuffle(&mut rand);
         let mut result_set = vec![];
         let mut iter_num = 0;
@@ -253,6 +266,7 @@ fn refine(
         .filter_map(|(i, row)| {
             let coefficient = row[obj_field_idx] as f64;
             let boundaries = (f64::NEG_INFINITY, f64::INFINITY);
+            //println!("Objective {}", coefficient);
             Some((problem.add_var(coefficient, boundaries), i))
         })
         .collect::<HashMap<_, _>>();
@@ -276,6 +290,10 @@ fn refine(
                 result_set.iter().for_each(|(_, row)| {
                     rhs -= row[*index];
                 });
+                // println!(
+                //     "Adding constrains, lhs {:?}, op {:?} rhs {}",
+                //     lhs, comp_op, rhs
+                // );
                 problem.add_constraint(lhs, comp_op, rhs as f64);
                 cons_vals.push(sum_cof);
             } else {
@@ -304,8 +322,16 @@ fn refine(
             problem.add_constraint(lhs, ComparisonOp::Le, 1.0);
         });
     }
+    vars.iter().for_each(|(v, _row)| {
+        let mut lhs = LinearExpr::empty();
+        lhs.add(*v, 1.0f64);
+        problem.add_constraint(lhs, ComparisonOp::Ge, 0.0);
+    });
     match problem.solve() {
-        Ok(solution) => Some((solution, vars)),
+        Ok(solution) => {
+            // println!("Refine result {:?}", solution.iter().collect::<Vec<_>>());
+            Some((solution, vars))
+        }
         Err(err) => {
             println!(
                 "Cannot solve the linear programming problem in the refine phase: {:?}",
@@ -347,20 +373,18 @@ fn sketch(
         })
         .enumerate()
         .collect::<Vec<_>>();
-    let mut cons_vals = vec![];
     query.cons.iter().for_each(|c| match c {
         QueryConstrain::Sum(expr) => {
             if let Some(index) = headers.get(&expr.attr) {
+                //println!("Attr: {}", expr.attr);
                 let mut lhs = LinearExpr::empty();
-                let mut sum_cof = 0.0;
                 vars.iter().for_each(|(row, v)| {
                     let cof = tuples[*row][*index];
-                    sum_cof += cof;
                     lhs.add(*v, cof as f64);
                 });
                 let (comp_op, rhs) = expr.comp.to_solver_op();
+                println!("Sketch constrain rhs {}, op {:?}", rhs, comp_op);
                 problem.add_constraint(lhs, comp_op, rhs as f64);
-                cons_vals.push(sum_cof);
             } else {
                 println!("Cannot find field \"{}\"", expr.attr);
             }
@@ -381,6 +405,11 @@ fn sketch(
             problem.add_constraint(lhs, ComparisonOp::Le, 1.0);
         });
     }
+    vars.iter().for_each(|(_row, v)| {
+        let mut lhs = LinearExpr::empty();
+        lhs.add(*v, 1.0f64);
+        problem.add_constraint(lhs, ComparisonOp::Ge, 0.0);
+    });
     match problem.solve() {
         Ok(solution) => Some((solution, vars)),
         Err(err) => {
@@ -394,7 +423,7 @@ fn sketch(
 }
 
 fn clustering(data: &DataSet, k: usize) -> KMeansState<f32> {
-    let iter = 50;
+    let iter = 2;
     let (sample_cnt, sample_dims, k, max_iter) = (data.rows, data.num_cols, k, iter);
     let data_clone = data.buffer.clone();
     // Calculate kmeans, using kmean++ as initialization-method
@@ -427,11 +456,9 @@ fn read_line(mem: &Mmap, start: usize, ends: usize) -> Vec<&str> {
 fn str_line_to_num_line(line_str: Vec<&str>) -> Vec<f32> {
     line_str
         .iter()
-        .map(|str| {
-            match str.trim().parse() {
-                Ok(num) => num,
-                Err(e) => panic!("Error '{:?}' on parsing {}, line {:?}", e, str, line_str)
-            }
+        .map(|str| match str.trim().parse() {
+            Ok(num) => num,
+            Err(e) => panic!("Error '{:?}' on parsing {}, line {:?}", e, str, line_str),
         })
         .collect()
 }
