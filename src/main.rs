@@ -3,7 +3,10 @@ use json5;
 use kmeans::{KMeans, KMeansConfig, KMeansState};
 use memchr::{memchr_iter, Memchr};
 use memmap2::*;
-use minilp::{ComparisonOp, LinearExpr, OptimizationDirection, Problem, Solution, Variable};
+use lp_solvers::{lp_format::{Constraint, LpObjective}, solvers::Solution};
+use lp_solvers::problem::{Problem, StrExpression, Variable};
+use lp_solvers::solvers::{CbcSolver, SolverTrait};
+use lp_solvers::solvers::Status::Optimal;
 use rand::prelude::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -11,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
 use std::io::BufRead;
+use std::cmp::Ordering;
 
 #[derive(Serialize, Deserialize, Debug)]
 enum QueryObjective {
@@ -147,7 +151,8 @@ fn run_query(
     data: &DataSet,
     query: &Query,
     centroids: &Vec<&[f32]>,
-    headers: &HashMap<String, usize>,
+    headers: &Vec<&str>,
+    header_index: &HashMap<String, usize>,
     cluster_rows: &HashMap<usize, Vec<usize>>,
 ) {
     // println!("Centroids: {:?}", centroids);
@@ -240,7 +245,8 @@ fn refine(
     _picked_cluster: usize,
     picked_rows: &Vec<&[f32]>,
     result_set: &Vec<(usize, &[f32])>,
-    headers: &HashMap<String, usize>,
+    headers: &Vec<&str>,
+    header_index: &HashMap<String, usize>,
 ) -> Option<(Solution, HashMap<Variable, usize>)> {
     let obj_field;
     let mut problem = match &query.obj {
@@ -343,22 +349,31 @@ fn refine(
 }
 
 fn sketch(
+    query_id: usize,
     query: &Query,
     tuples: &Vec<&[f32]>,
-    headers: &HashMap<String, usize>,
+    headers: &Vec<&str>,
+    header_index: &HashMap<String, usize>,
 ) -> Option<(Solution, Vec<(usize, Variable)>)> {
     let obj_field;
-    let mut problem = match &query.obj {
+    let objective = match &query.obj {
         QueryObjective::Maximize(v) => {
             obj_field = v;
-            Problem::new(OptimizationDirection::Maximize)
+            LpObjective::Maximize
         }
         QueryObjective::Minimize(v) => {
             obj_field = v;
-            Problem::new(OptimizationDirection::Minimize)
+            LpObjective::Minimize
         }
     };
-    let obj_field_idx = if let Some(idx) = headers.get(obj_field) {
+    let mut problem = Problem {
+        name: format!("{}-sketch", query_id),
+        sense: objective,
+        objective: StrExpression(obj_field.to_owned()),
+        variables: vec![],
+        constraints: vec![]
+    };
+    let obj_field_idx = if let Some(idx) = header_index.get(obj_field) {
         *idx
     } else {
         println!("Cannot find objective field '{}'", obj_field);
@@ -366,12 +381,20 @@ fn sketch(
     };
     let vars = tuples
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(i, row)| {
             let coefficient = row[obj_field_idx] as f64;
             let boundaries = (f64::NEG_INFINITY, f64::INFINITY);
-            problem.add_var(coefficient, boundaries) // TODO: Refine this
+            let var_name = format!("var{}", i);
+            let variable = Variable {
+                name: var_name.clone(),
+                is_integer: true, // We want ILP solver
+                lower_bound: f64::MIN,
+                upper_bound: f64::MAX
+            };
+            problem.variables.push(variable);
+            var_name
         })
-        .enumerate()
         .collect::<Vec<_>>();
     query.cons.iter().for_each(|c| match c {
         QueryConstrain::Sum(expr) => {
@@ -489,20 +512,20 @@ fn read_all_data(mem: &Mmap, lines: Memchr, start: usize, num_cols: usize) -> Da
 }
 
 impl QueryConstrainComp {
-    fn to_solver_op(&self) -> (ComparisonOp, f32) {
+    fn to_solver_op(&self) -> (Ordering, f32) {
         let rhs;
         let comp_op = match self {
             QueryConstrainComp::LE(r) => {
                 rhs = *r;
-                ComparisonOp::Le
+                Ordering::Less
             }
             QueryConstrainComp::GE(r) => {
                 rhs = *r;
-                ComparisonOp::Ge
+                Ordering::Greater
             }
             QueryConstrainComp::Eq(r) => {
                 rhs = *r;
-                ComparisonOp::Eq
+                Ordering::Equal
             }
         };
         (comp_op, rhs)
