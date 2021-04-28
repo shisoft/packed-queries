@@ -1,7 +1,7 @@
 use json5;
 use kmeans::{KMeans, KMeansConfig, KMeansState};
 use lp_solvers::problem::{Problem, StrExpression, Variable};
-use lp_solvers::solvers::{CbcSolver, SolverTrait};
+use lp_solvers::solvers::{AllSolvers, SolverTrait};
 use lp_solvers::{
     lp_format::{Constraint, LpObjective},
     solvers::{Solution, Status},
@@ -103,7 +103,7 @@ fn main() {
         "Read total of {} row of data, preparing clustering data",
         data.rows
     );
-    let k = 256;
+    let k = 64;
     let clusters = clustering(&data, k);
     let centroids = clusters
         .centroids
@@ -167,7 +167,7 @@ fn run_query(
 ) {
     // println!("Centroids: {:?}", centroids);
     if let Some((solution, _vars)) = sketch(query_id, query, centroids, headers, header_index) {
-        // println!("Sketch solution: {:?}", solution);
+        println!("Sketch solution: {:?}", solution);
         let mut rand = thread_rng();
         if solution.status != Status::Optimal {
             println!("Sketch result not optimal: {:?}", solution.status);
@@ -175,23 +175,28 @@ fn run_query(
         let selected_variable = solution
             .results
             .iter()
-            .enumerate()
+            // remove start with `x`
+            .filter(|(var,_)| var.starts_with("var"))
             .map(|tuple| {
-                let (_, (var, val)) = tuple;
+                // println!("Checking selected tuple {:?}", tuple);
+                let (var, val) = tuple;
+                let var_id = var[3..].parse::<usize>().unwrap();
+                // println!("{} => {}", var, var_id);
                 assert!(*val >= 0.0, "Variable is negative {:?} = {}", var, val);
-                tuple
+                (var_id, tuple)
             })
             .filter(|(_i, (_var, val))| **val >= 1.0)
             .collect::<Vec<_>>();
         let mut candidates = selected_variable
             .iter()
             .map(|(cluster, (var, _))| {
+                println!("Extract cluster {}", cluster);
                 (
                     cluster,
                     var,
                     cluster_rows[cluster]
                         .iter()
-                        .map(|row_id| data.row(*row_id))
+                        .map(|row_id| (*cluster, data.row(*row_id)))
                         .collect::<Vec<_>>(),
                 )
             })
@@ -223,7 +228,7 @@ fn run_query(
                 if let Some((var, _val)) = solution
                     .results
                     .iter()
-                    .filter(|(var, val)| **val >= 1.0)
+                    .filter(|(_var, val)| **val >= 1.0)
                     .collect::<Vec<_>>()
                     .get(0)
                 {
@@ -231,7 +236,7 @@ fn run_query(
                     println!("{} => {}", var, var_id);
                     let picked_row_id = vars[var_id].0;
                     let picked_row = picked_rows[picked_row_id];
-                    result_set.push((picked_row_id, picked_row));
+                    result_set.push(picked_row);
                 } else {
                     break;
                 }
@@ -256,11 +261,11 @@ fn refine(
     iter: usize,
     query: &Query,
     centroids: &Vec<&[f32]>,
-    candidates: &Vec<(&usize, &&String, Vec<&[f32]>)>,
+    candidates: &Vec<(&usize, &&String, Vec<(usize, &[f32])>)>,
     _picked_cluster: usize,
-    picked_rows: &Vec<&[f32]>,
+    picked_rows: &Vec<(usize, &[f32])>,
     result_set: &Vec<(usize, &[f32])>,
-    headers: &Vec<&str>,
+    _headers: &Vec<&str>,
     header_index: &HashMap<String, usize>,
 ) -> Option<(Solution, Vec<(usize, String)>)> {
     let obj_field;
@@ -292,7 +297,7 @@ fn refine(
     let vars = picked_rows
         .iter()
         .enumerate()
-        .map(|(i, row)| {
+        .map(|(i, (_, row))| {
             let coefficient = row[obj_field_idx] as f64;
             let var_name = format!("var{}", i);
             let variable = Variable {
@@ -302,7 +307,7 @@ fn refine(
                 upper_bound: f64::MAX,
             };
             problem.variables.push(variable);
-            objective_expr.push_str(&format!("+{}*{}", var_name, coefficient));
+            objective_expr.push_str(&format!("+{}*{}", var_name, coefficient as u64));
             (i, var_name)
         })
         .collect::<Vec<_>>();
@@ -312,8 +317,8 @@ fn refine(
             if let Some(index) = header_index.get(&expr.attr) {
                 let mut lhs = String::from("0");
                 vars.iter().for_each(|(row, v)| {
-                    let cof = picked_rows[*row][*index];
-                    lhs.push_str(&format!("+ {}*{}", *v, cof));
+                    let cof = picked_rows[*row].1[*index];
+                    lhs.push_str(&format!("+{}*{}", *v, cof as u64));
                 });
                 let (comp_op, mut rhs) = expr.comp.to_solver_op();
                 candidates.iter().for_each(|(cluster_id, _, _)| {
@@ -335,9 +340,9 @@ fn refine(
         QueryConstrain::Count(count) => {
             let mut lhs = String::from("0");
             vars.iter().for_each(|(_row, v)| {
-                lhs.push_str(&format!("+ {}*1.0", *v));
+                lhs.push_str(&format!("+{}", *v));
             });
-            let (comp_op, mut rhs) = count.to_solver_op();
+            let (comp_op, rhs) = count.to_solver_op();
             constrains.push(Constraint {
                 lhs: StrExpression(lhs),
                 operator: comp_op,
@@ -356,7 +361,7 @@ fn refine(
     }
     problem.constraints = constrains;
     problem.objective = StrExpression(objective_expr);
-    match CbcSolver::default().run(&problem) {
+    match AllSolvers::default().run(&problem) {
         Ok(solution) => Some((solution, vars)),
         Err(err) => {
             println!(
@@ -372,7 +377,7 @@ fn sketch(
     query_id: usize,
     query: &Query,
     tuples: &Vec<&[f32]>,
-    headers: &Vec<&str>,
+    _headers: &Vec<&str>,
     header_index: &HashMap<String, usize>,
 ) -> Option<(Solution, Vec<(usize, String)>)> {
     let obj_field;
@@ -413,7 +418,7 @@ fn sketch(
                 upper_bound: f64::MAX,
             };
             problem.variables.push(variable);
-            objective_expr.push_str(&format!("+{}*{}", var_name, coefficient));
+            objective_expr.push_str(&format!("+{}*{}", var_name, coefficient as u64));
             (i, var_name)
         })
         .collect::<Vec<_>>();
@@ -425,10 +430,10 @@ fn sketch(
                 let mut lhs = String::from("0");
                 vars.iter().for_each(|(row, v)| {
                     let cof = tuples[*row][*index];
-                    lhs.push_str(&format!("+{}*{}", *v, cof));
+                    lhs.push_str(&format!("+{}*{}", *v, cof as u64));
                 });
                 let (comp_op, rhs) = expr.comp.to_solver_op();
-                // println!("Sketch constrain rhs {}, op {:?}, exp: {}", rhs, comp_op, lhs);
+                println!("Sketch constrain rhs {}, op {:?}, exp: {}", rhs, comp_op, lhs);
                 // lhs, comp_op, rhs as f64
                 constrains.push(Constraint {
                     lhs: StrExpression(lhs),
@@ -442,7 +447,7 @@ fn sketch(
         QueryConstrain::Count(count) => {
             let mut lhs = String::from("0");
             vars.iter().for_each(|(_row, v)| {
-                lhs.push_str(&format!("+{}*1.0", *v));
+                lhs.push_str(&format!("+{}", *v));
             });
             let (comp_op, rhs) = count.to_solver_op();
             constrains.push(Constraint {
@@ -466,9 +471,11 @@ fn sketch(
     //     lhs.add(*v, 1.0f64);
     //     problem.add_constraint(lhs, ComparisonOp::Ge, 0.0);
     // });
+    //println!("Sketch constrains {:?}", constrains.);
+    println!("Sketch objectives {:?}", objective_expr);
     problem.constraints = constrains;
     problem.objective = StrExpression(objective_expr);
-    match CbcSolver::default().run(&problem) {
+    match AllSolvers::default().run(&problem) {
         Ok(solution) => Some((solution, vars)),
         Err(err) => {
             println!(

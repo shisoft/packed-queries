@@ -1,12 +1,17 @@
-{obj: {Maximize: "count_order"}, repeat_0: true, cons: [
-  {Sum: {attr: "sum_base_price", comp: {LE: 15469853.7043}}},
-  {Sum: {attr: "sum_disc_price", comp: {LE: 45279795.0584}}},
-  {Sum: {attr: "sum_charge", comp: {LE: 95250227.7918}}},
-  {Sum: {attr: "avg_qty", comp: {LE: 50.353948653}}},
-  {Sum: {attr: "avg_price", comp: {LE: 68677.5852459}}},
-  {Sum: {attr: "avg_disc", comp: {LE: 0.110243522496}}},
-  {Sum: {attr: "sum_qty", comp: {LE: 77782.028739}}},
-  ]}
+{obj: {Maximize: "count_order"}, repeat_0: true, cons: [{Sum: {attr: "sum_base_price", comp: {LE: 15469853.7043}}}]}
+
+{obj: {Maximize: "count_order"}, repeat_0: true, cons: []}
 
 
-  {obj: {Maximize: "count_order"}, repeat_0: true, cons: [{Sum: {attr: "sum_base_price", comp: {LE: 15469853.7043}}},{Sum: {attr: "sum_disc_price", comp: {LE: 45279795.0584}}},{Sum: {attr: "sum_charge", comp: {LE: 95250227.7918}}},{Sum: {attr: "avg_qty", comp: {LE: 50.353948653}}},{Sum: {attr: "avg_price", comp: {LE: 68677.5852459}}},{Sum: {attr: "avg_disc", comp: {LE: 0.110243522496}}},{Sum: {attr: "sum_qty", comp: {LE: 77782.028739}}}]}
+{obj: {Maximize: "count_order"}, repeat_0: true, cons: [{Sum: {attr: "sum_base_price", comp: {LE: 15469853.7043}}},{Sum: {attr: "sum_disc_price", comp: {LE: 45279795.0584}}},{Sum: {attr: "sum_charge", comp: {LE: 95250227.7918}}},{Sum: {attr: "avg_qty", comp: {LE: 50.353948653}}},{Sum: {attr: "avg_price", comp: {LE: 68677.5852459}}},{Sum: {attr: "avg_disc", comp: {LE: 0.110243522496}}},{Sum: {attr: "sum_qty", comp: {LE: 77782.028739}}}]}
+
+
+
+
+{
+"var8": 0.0, 
+"var16": 0.0, 
+"x10": 1.0, 
+"x33": 1.0, 
+"var62": 0.0, 
+"x2": 1.0, "x37": 1.0, "x26": 1.0, "var18": 0.0, "var52": 0.0, "var33": 0.0, "var7": 0.0, "var13": 0.0, "x61": 1.0, "var53": 0.0, "x34": 1.0, "var35": 0.0, "var49": 0.0, "var63": 0.0, "x56": 1.0, "var30": 0.0, "x24": 1.0, "var28": 0.0, "x13": 1.0, "x49": 1.0, "var29": 0.0, "var31": 0.0, "var40": 0.0, "var4": 0.0, "var23": 0.0, "var45": 0.0, "x19": 1.0, "var59": 0.0, "var14": 0.0, "x7": 1.0, "x42": 1.0, "x28": 1.0, "x58": 1.0, "x22": 1.0, "x25": 1.0, "var32": 0.0, "x51": 1.0, "x30": 1.0, "var15": 0.0, "var27": 0.0, "var34": 0.0, "var26": 0.0, "var46": 0.0, "var47": 0.0, "x27": 1.0, "x5": 1.0, "x65": 1.0, "x44": 1.0, "var36": 0.0, "var61": 0.0, "x9": 1.0, "x63": 1.0, "var12": 0.0, "var44": 0.0, "x11": 1.0, "var41": 0.0, "var2": 0.0, "x32": 1.0, "var9": 0.0, "x47": 1.0, "var1": 0.0, "x21": 1.0, "var5": 0.0, "x46": 1.0, "x55": 1.0, "var37": 0.0, "var19": 0.0, "x18": 1.0, "x57": 1.0, "var60": 0.0, "x3": 1.0, "x8": 1.0, "var38": 0.0, "var39": 0.0, "x48": 1.0, "var6": 0.0, "var56": 0.0, "x12": 1.0, "x6": 1.0, "x31": 1.0, "var21": 0.0, "var42": 0.0, "var55": 0.0, "var43": 0.0, "x35": 1.0, "var20": 0.0, "x41": 1.0, "x15": 1.0, "x39": 1.0, "x54": 1.0, "var51": 0.0, "var22": 0.0, "x17": 1.0, "x16": 1.0, "x45": 1.0, "var48": 0.0, "var24": 0.0, "x23": 1.0, "x64": 1.0, "var50": 0.0, "var54": 0.0, "var58": 0.0, "var57": 0.0, "x20": 1.0, "x38": 1.0, "x4": 1.0, "var0": 0.0, "x43": 1.0, "x14": 1.0, "var10": 0.0, "var11": 0.0, "x59": 1.0, "x53": 1.0, "x36": 1.0, "x60": 1.0, "var25": 0.0, "x29": 1.0, "x62": 1.0, "x40": 1.0, "var17": 0.0, "x50": 1.0, "var3": 0.0, "x52": 1.0} }
