@@ -13,4 +13,4 @@ serde = { version = "1", features = ["derive"] }
 json5 = "0.3.0"
 itertools = "0.10"
 rand = "0.8"
-lp-solvers = "0.0.4"
+lp-solvers = {version = "*", features = ["cplex"]}
