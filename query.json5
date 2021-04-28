@@ -1,0 +1,12 @@
+{obj: {Maximize: "count_order"}, repeat_0: true, cons: [
+  {Sum: {attr: "sum_base_price", comp: {LE: 15469853.7043}}},
+  {Sum: {attr: "sum_disc_price", comp: {LE: 45279795.0584}}},
+  {Sum: {attr: "sum_charge", comp: {LE: 95250227.7918}}},
+  {Sum: {attr: "avg_qty", comp: {LE: 50.353948653}}},
+  {Sum: {attr: "avg_price", comp: {LE: 68677.5852459}}},
+  {Sum: {attr: "avg_disc", comp: {LE: 0.110243522496}}},
+  {Sum: {attr: "sum_qty", comp: {LE: 77782.028739}}},
+  ]}
+
+
+  {obj: {Maximize: "count_order"}, repeat_0: true, cons: [{Sum: {attr: "sum_base_price", comp: {LE: 15469853.7043}}},{Sum: {attr: "sum_disc_price", comp: {LE: 45279795.0584}}},{Sum: {attr: "sum_charge", comp: {LE: 95250227.7918}}},{Sum: {attr: "avg_qty", comp: {LE: 50.353948653}}},{Sum: {attr: "avg_price", comp: {LE: 68677.5852459}}},{Sum: {attr: "avg_disc", comp: {LE: 0.110243522496}}},{Sum: {attr: "sum_qty", comp: {LE: 77782.028739}}}]}

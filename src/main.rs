@@ -1,20 +1,21 @@
-use itertools::Itertools;
 use json5;
 use kmeans::{KMeans, KMeansConfig, KMeansState};
-use memchr::{memchr_iter, Memchr};
-use memmap2::*;
-use lp_solvers::{lp_format::{Constraint, LpObjective}, solvers::Solution};
 use lp_solvers::problem::{Problem, StrExpression, Variable};
 use lp_solvers::solvers::{CbcSolver, SolverTrait};
-use lp_solvers::solvers::Status::Optimal;
+use lp_solvers::{
+    lp_format::{Constraint, LpObjective},
+    solvers::{Solution, Status},
+};
+use memchr::{memchr_iter, Memchr};
+use memmap2::*;
 use rand::prelude::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::BufRead;
-use std::cmp::Ordering;
 
 #[derive(Serialize, Deserialize, Debug)]
 enum QueryObjective {
@@ -136,7 +137,15 @@ fn main() {
         match query_res {
             Ok(query) => {
                 println!("Accepting query {:?}", query);
-                run_query(&data, &query, &centroids, &header_index, &cluster_rows);
+                run_query(
+                    query_id,
+                    &data,
+                    &query,
+                    &centroids,
+                    &headers,
+                    &header_index,
+                    &cluster_rows,
+                );
             }
             Err(e) => {
                 println!("Cannot parse json query \"{}\", reason: {:?}", str_line, e);
@@ -148,6 +157,7 @@ fn main() {
 }
 
 fn run_query(
+    query_id: usize,
     data: &DataSet,
     query: &Query,
     centroids: &Vec<&[f32]>,
@@ -156,10 +166,14 @@ fn run_query(
     cluster_rows: &HashMap<usize, Vec<usize>>,
 ) {
     // println!("Centroids: {:?}", centroids);
-    if let Some((solution, _vars)) = sketch(query, centroids, headers) {
+    if let Some((solution, _vars)) = sketch(query_id, query, centroids, headers, header_index) {
         // println!("Sketch solution: {:?}", solution);
         let mut rand = thread_rng();
+        if solution.status != Status::Optimal {
+            println!("Sketch result not optimal: {:?}", solution.status);
+        }
         let selected_variable = solution
+            .results
             .iter()
             .enumerate()
             .map(|tuple| {
@@ -183,19 +197,13 @@ fn run_query(
             })
             .collect::<Vec<_>>();
         println!("Have {} candidates", candidates.len());
-        // {
-        //     let column_id = headers.get(&"sum_base_price".to_string()).unwrap();
-        //     let mut sum = 0.0;
-        //     selected_variable
-        //         .iter()
-        //         .for_each(|(c, _)| sum += centroids[*c][*column_id]);
-        //     println!("Sum of sum_base_price {:?}", sum);
-        // }
         candidates.shuffle(&mut rand);
         let mut result_set = vec![];
         let mut iter_num = 0;
         while let Some((cluster_id, _var, picked_rows)) = candidates.pop() {
             if let Some((solution, vars)) = refine(
+                query_id,
+                iter_num,
                 query,
                 centroids,
                 &candidates,
@@ -203,20 +211,25 @@ fn run_query(
                 &picked_rows,
                 &result_set,
                 headers,
+                header_index
             ) {
+                assert_eq!(solution.status, Status::Optimal);
                 println!("Iter {}, solution {:?}", iter_num, solution);
                 iter_num += 1;
                 // All the variables == 0.0, backtrack, do cluster_id first
-                if solution.iter().all(|(_, val)| *val == 0.0) {
+                if solution.results.iter().all(|(_, val)| *val == 0.0) {
                     panic!("BACKTRACK");
                 }
                 if let Some((var, _val)) = solution
+                    .results
                     .iter()
-                    .filter(|(_var, val)| **val >= 1.0)
+                    .filter(|(var, val)| **val >= 1.0)
                     .collect::<Vec<_>>()
                     .get(0)
                 {
-                    let picked_row_id = vars[var];
+                    let var_id = var[3..].parse::<usize>().unwrap();
+                    println!("{} => {}", var, var_id);
+                    let picked_row_id = vars[var_id].0;
                     let picked_row = picked_rows[picked_row_id];
                     result_set.push((picked_row_id, picked_row));
                 } else {
@@ -227,7 +240,7 @@ fn run_query(
             }
         }
         println!("Result: {} rows", result_set.len());
-        headers.iter().for_each(|(s, _)| print!("|{}\t", s));
+        headers.iter().for_each(|s| print!("|{}\t", s));
         println!("|");
         result_set.iter().for_each(|(_row_id, row)| {
             row.iter().for_each(|val| {
@@ -239,54 +252,68 @@ fn run_query(
 }
 
 fn refine(
+    query_id: usize,
+    iter: usize,
     query: &Query,
     centroids: &Vec<&[f32]>,
-    candidates: &Vec<(&usize, &Variable, Vec<&[f32]>)>,
+    candidates: &Vec<(&usize, &&String, Vec<&[f32]>)>,
     _picked_cluster: usize,
     picked_rows: &Vec<&[f32]>,
     result_set: &Vec<(usize, &[f32])>,
     headers: &Vec<&str>,
     header_index: &HashMap<String, usize>,
-) -> Option<(Solution, HashMap<Variable, usize>)> {
+) -> Option<(Solution, Vec<(usize, String)>)> {
     let obj_field;
-    let mut problem = match &query.obj {
+    let objective = match &query.obj {
         QueryObjective::Maximize(v) => {
             obj_field = v;
-            Problem::new(OptimizationDirection::Maximize)
+            LpObjective::Maximize
         }
         QueryObjective::Minimize(v) => {
             obj_field = v;
-            Problem::new(OptimizationDirection::Minimize)
+            LpObjective::Minimize
         }
     };
-    let obj_field_idx = if let Some(idx) = headers.get(obj_field) {
+    let mut problem = Problem {
+        name: format!("{}-refine-{}", query_id, iter),
+        sense: objective,
+        objective: StrExpression(obj_field.to_owned()),
+        variables: vec![],
+        constraints: vec![],
+    };
+    let obj_field_idx = if let Some(idx) = header_index.get(obj_field) {
         *idx
     } else {
         println!("Cannot find objective field '{}'", obj_field);
         return None;
     };
     println!("Picked {} rows", picked_rows.len());
+    let mut objective_expr = "0".to_string();
     let vars = picked_rows
         .iter()
         .enumerate()
-        .filter_map(|(i, row)| {
+        .map(|(i, row)| {
             let coefficient = row[obj_field_idx] as f64;
-            let boundaries = (f64::NEG_INFINITY, f64::INFINITY);
-            //println!("Objective {}", coefficient);
-            Some((problem.add_var(coefficient, boundaries), i))
+            let var_name = format!("var{}", i);
+            let variable = Variable {
+                name: var_name.clone(),
+                is_integer: true, // We want ILP solver
+                lower_bound: f64::MIN,
+                upper_bound: f64::MAX,
+            };
+            problem.variables.push(variable);
+            objective_expr.push_str(&format!("+{}*{}", var_name, coefficient));
+            (i, var_name)
         })
-        .collect::<HashMap<_, _>>();
-
-    let mut cons_vals = vec![];
+        .collect::<Vec<_>>();
+    let mut constrains = vec![];
     query.cons.iter().for_each(|c| match c {
         QueryConstrain::Sum(expr) => {
-            if let Some(index) = headers.get(&expr.attr) {
-                let mut lhs = LinearExpr::empty();
-                let mut sum_cof = 0.0;
-                vars.iter().for_each(|(v, row)| {
+            if let Some(index) = header_index.get(&expr.attr) {
+                let mut lhs = String::from("0");
+                vars.iter().for_each(|(row, v)| {
                     let cof = picked_rows[*row][*index];
-                    sum_cof += cof;
-                    lhs.add(*v, cof as f64);
+                    lhs.push_str(&format!("+ {}*{}", *v, cof));
                 });
                 let (comp_op, mut rhs) = expr.comp.to_solver_op();
                 candidates.iter().for_each(|(cluster_id, _, _)| {
@@ -296,48 +323,41 @@ fn refine(
                 result_set.iter().for_each(|(_, row)| {
                     rhs -= row[*index];
                 });
-                // println!(
-                //     "Adding constrains, lhs {:?}, op {:?} rhs {}",
-                //     lhs, comp_op, rhs
-                // );
-                problem.add_constraint(lhs, comp_op, rhs as f64);
-                cons_vals.push(sum_cof);
+                constrains.push(Constraint {
+                    lhs: StrExpression(lhs),
+                    operator: comp_op,
+                    rhs: rhs as f64
+                });
             } else {
                 println!("Cannot find field \"{}\"", expr.attr);
             }
         }
         QueryConstrain::Count(count) => {
-            let mut lhs = LinearExpr::empty();
-            vars.iter().for_each(|(v, _row)| {
-                lhs.add(*v, 1.0f64);
+            let mut lhs = String::from("0");
+            vars.iter().for_each(|(_row, v)| {
+                lhs.push_str(&format!("+ {}*1.0", *v));
             });
             let (comp_op, mut rhs) = count.to_solver_op();
-            // candidates.iter().for_each(|_| {
-            //     rhs -= 1.0;
-            // });
-            // result_set.iter().for_each(|_| {
-            //     rhs -= 1.0;
-            // });
-            problem.add_constraint(lhs, comp_op, rhs as f64);
+            constrains.push(Constraint {
+                lhs: StrExpression(lhs),
+                operator: comp_op,
+                rhs: rhs as f64,
+            });
         }
     });
     if query.repeat_0 {
-        vars.iter().for_each(|(v, _row)| {
-            let mut lhs = LinearExpr::empty();
-            lhs.add(*v, 1.0f64);
-            problem.add_constraint(lhs, ComparisonOp::Le, 1.0);
+        vars.iter().for_each(|(_row, v)| {
+            constrains.push(Constraint {
+                lhs: StrExpression(v.clone()),
+                operator: Ordering::Less,
+                rhs: 1.0,
+            })
         });
     }
-    vars.iter().for_each(|(v, _row)| {
-        let mut lhs = LinearExpr::empty();
-        lhs.add(*v, 1.0f64);
-        problem.add_constraint(lhs, ComparisonOp::Ge, 0.0);
-    });
-    match problem.solve() {
-        Ok(solution) => {
-            // println!("Refine result {:?}", solution.iter().collect::<Vec<_>>());
-            Some((solution, vars))
-        }
+    problem.constraints = constrains;
+    problem.objective = StrExpression(objective_expr);
+    match CbcSolver::default().run(&problem) {
+        Ok(solution) => Some((solution, vars)),
         Err(err) => {
             println!(
                 "Cannot solve the linear programming problem in the refine phase: {:?}",
@@ -354,7 +374,7 @@ fn sketch(
     tuples: &Vec<&[f32]>,
     headers: &Vec<&str>,
     header_index: &HashMap<String, usize>,
-) -> Option<(Solution, Vec<(usize, Variable)>)> {
+) -> Option<(Solution, Vec<(usize, String)>)> {
     let obj_field;
     let objective = match &query.obj {
         QueryObjective::Maximize(v) => {
@@ -371,7 +391,7 @@ fn sketch(
         sense: objective,
         objective: StrExpression(obj_field.to_owned()),
         variables: vec![],
-        constraints: vec![]
+        constraints: vec![],
     };
     let obj_field_idx = if let Some(idx) = header_index.get(obj_field) {
         *idx
@@ -379,61 +399,76 @@ fn sketch(
         println!("Cannot find objective field '{}'", obj_field);
         return None;
     };
+    let mut objective_expr = "0".to_string();
     let vars = tuples
         .iter()
         .enumerate()
         .map(|(i, row)| {
             let coefficient = row[obj_field_idx] as f64;
-            let boundaries = (f64::NEG_INFINITY, f64::INFINITY);
             let var_name = format!("var{}", i);
             let variable = Variable {
                 name: var_name.clone(),
                 is_integer: true, // We want ILP solver
                 lower_bound: f64::MIN,
-                upper_bound: f64::MAX
+                upper_bound: f64::MAX,
             };
             problem.variables.push(variable);
-            var_name
+            objective_expr.push_str(&format!("+{}*{}", var_name, coefficient));
+            (i, var_name)
         })
         .collect::<Vec<_>>();
+    let mut constrains = vec![];
     query.cons.iter().for_each(|c| match c {
         QueryConstrain::Sum(expr) => {
-            if let Some(index) = headers.get(&expr.attr) {
+            if let Some(index) = header_index.get(&expr.attr) {
                 //println!("Attr: {}", expr.attr);
-                let mut lhs = LinearExpr::empty();
+                let mut lhs = String::from("0");
                 vars.iter().for_each(|(row, v)| {
                     let cof = tuples[*row][*index];
-                    lhs.add(*v, cof as f64);
+                    lhs.push_str(&format!("+{}*{}", *v, cof));
                 });
                 let (comp_op, rhs) = expr.comp.to_solver_op();
-                println!("Sketch constrain rhs {}, op {:?}", rhs, comp_op);
-                problem.add_constraint(lhs, comp_op, rhs as f64);
+                // println!("Sketch constrain rhs {}, op {:?}, exp: {}", rhs, comp_op, lhs);
+                // lhs, comp_op, rhs as f64
+                constrains.push(Constraint {
+                    lhs: StrExpression(lhs),
+                    operator: comp_op,
+                    rhs: rhs as f64,
+                });
             } else {
                 println!("Cannot find field \"{}\"", expr.attr);
             }
         }
         QueryConstrain::Count(count) => {
-            let mut lhs = LinearExpr::empty();
+            let mut lhs = String::from("0");
             vars.iter().for_each(|(_row, v)| {
-                lhs.add(*v, 1.0f64);
+                lhs.push_str(&format!("+{}*1.0", *v));
             });
             let (comp_op, rhs) = count.to_solver_op();
-            problem.add_constraint(lhs, comp_op, rhs as f64);
+            constrains.push(Constraint {
+                lhs: StrExpression(lhs),
+                operator: comp_op,
+                rhs: rhs as f64,
+            });
         }
     });
     if query.repeat_0 {
         vars.iter().for_each(|(_row, v)| {
-            let mut lhs = LinearExpr::empty();
-            lhs.add(*v, 1.0f64);
-            problem.add_constraint(lhs, ComparisonOp::Le, 1.0);
+            constrains.push(Constraint {
+                lhs: StrExpression(v.clone()),
+                operator: Ordering::Less,
+                rhs: 1.0,
+            })
         });
     }
-    vars.iter().for_each(|(_row, v)| {
-        let mut lhs = LinearExpr::empty();
-        lhs.add(*v, 1.0f64);
-        problem.add_constraint(lhs, ComparisonOp::Ge, 0.0);
-    });
-    match problem.solve() {
+    // vars.iter().for_each(|(_row, v)| {
+    //     let mut lhs = LinearExpr::empty();
+    //     lhs.add(*v, 1.0f64);
+    //     problem.add_constraint(lhs, ComparisonOp::Ge, 0.0);
+    // });
+    problem.constraints = constrains;
+    problem.objective = StrExpression(objective_expr);
+    match CbcSolver::default().run(&problem) {
         Ok(solution) => Some((solution, vars)),
         Err(err) => {
             println!(
@@ -446,7 +481,7 @@ fn sketch(
 }
 
 fn clustering(data: &DataSet, k: usize) -> KMeansState<f32> {
-    let iter = 2;
+    let iter = 100;
     let (sample_cnt, sample_dims, k, max_iter) = (data.rows, data.num_cols, k, iter);
     let data_clone = data.buffer.clone();
     // Calculate kmeans, using kmean++ as initialization-method
