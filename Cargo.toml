@@ -6,7 +6,6 @@ edition = "2018"
 
 [dependencies]
 memmap2 = "0.2"
-minilp = "0.2.2"
 kmeans = "0.2.0"
 memchr = "2.3.4"
 rayon = "1.5.0"
@@ -14,3 +13,4 @@ serde = { version = "1", features = ["derive"] }
 json5 = "0.3.0"
 itertools = "0.10"
 rand = "0.8"
+lp-solvers = {version = "*", features = ["cplex"]}

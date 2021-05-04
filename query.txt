@@ -1,0 +1,71 @@
+# Dataset: TPCH
+
+2 ways to access the dataset:
+(1) Via the course website: http://avid.cs.umass.edu/courses/645/s2021/project/paql_data/tpch.csv
+(2) On EDLab under: /courses/cs600/cs645/cs645.s2021/paql_project/tpch.csv
+
+(For (2) you need access to EDLab.)
+
+Columns: id, sum_base_price, sum_disc_price, sum_charge, avg_qty, avg_price, avg_disc, sum_qty, count_order, p_size, ps_min_supplycost, revenue, o_totalprice, o_shippriority
+
+Size: 6001215 tuples
+
+
+
+# Queries
+
+4 queries: Q1, Q2, Q3, Q4
+
+-- Q1:
+select
+    package(*) as P
+from
+    tpch REPEAT 0
+such that
+    sum(sum_base_price) <= 15469853.7043 and
+    sum(sum_disc_price) <= 45279795.0584 and
+    sum(sum_charge) <= 95250227.7918 and
+    sum(avg_qty) <= 50.353948653 and
+    sum(avg_price) <= 68677.5852459 and
+    sum(avg_disc) <= 0.110243522496 and
+    sum(sum_qty) <= 77782.028739 and
+    count(*) >= 1
+maximize
+    sum(count_order);
+
+
+-- Q2:
+select
+    package(*) as P
+from
+    tpch REPEAT 0
+such that
+    sum(p_size) <= 8 and
+    count(*) >= 1
+minimize
+    sum(ps_min_supplycost);
+
+
+-- Q3:
+select
+    package(*) as P
+from
+    tpch REPEAT 0
+such that
+    sum(revenue) >= 413930.849506 and
+    count(*) >= 1
+minimize
+    count(*);
+
+
+-- Q4:
+select
+    package(*) as P
+from
+    tpch REPEAT 0
+such that
+    sum(o_totalprice) <= 453998.242103 and
+    sum(o_shippriority) >= 3 and
+    count(*) >= 1
+minimize
+    count(*);
