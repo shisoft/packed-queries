@@ -17,6 +17,8 @@ use std::env;
 use std::fs::File;
 use std::io::BufRead;
 
+const STRING_BUFFER_SIZE: usize = 10240;
+
 #[derive(Serialize, Deserialize, Debug)]
 enum QueryObjective {
     Maximize(String),
@@ -48,6 +50,7 @@ struct Query {
     obj: QueryObjective,
     cons: Vec<QueryConstrain>,
     repeat_0: bool,
+    direct: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -69,6 +72,13 @@ impl DataSet {
         let cols = self.num_cols;
         let start = i * cols;
         &self.buffer.as_slice()[start..start + cols]
+    }
+    fn all_rows(&self) -> Vec<&[f32]> {
+        let cols = self.num_cols;
+        (0..self.buffer.len())
+            .step_by(cols)
+            .map(|i| &self.buffer.as_slice()[i..i + cols])
+            .collect()
     }
 }
 
@@ -103,7 +113,7 @@ fn main() {
         "Read total of {} row of data, preparing clustering data",
         data.rows
     );
-    let k = 128;
+    let k = 200;
     let clusters = clustering(&data, k);
     let centroids = clusters
         .centroids
@@ -137,15 +147,21 @@ fn main() {
         match query_res {
             Ok(query) => {
                 println!("Accepting query {:?}", query);
-                run_query(
-                    query_id,
-                    &data,
-                    &query,
-                    &centroids,
-                    &headers,
-                    &header_index,
-                    &cluster_rows,
-                );
+                if query.direct != Some(true) {
+                    // Use sketch-refine approach
+                    run_query(
+                        query_id,
+                        &data,
+                        &query,
+                        &centroids,
+                        &headers,
+                        &header_index,
+                        &cluster_rows,
+                    );
+                } else {
+                    // Use direct approach
+                    run_direct_query(query_id, &data, &query, &headers, &header_index);
+                }
             }
             Err(e) => {
                 println!("Cannot parse json query \"{}\", reason: {:?}", str_line, e);
@@ -165,7 +181,7 @@ fn run_query(
     header_index: &HashMap<String, usize>,
     cluster_rows: &HashMap<usize, Vec<usize>>,
 ) {
-    // println!("Centroids: {:?}", centroids);
+    println!("Using sketch-refine approach");
     if let Some((solution, _vars)) = sketch(query_id, query, centroids, headers, header_index) {
         println!("Sketch solution: {:?}", solution);
         let mut rand = thread_rng();
@@ -176,7 +192,7 @@ fn run_query(
             .results
             .iter()
             // remove start with `x`
-            .filter(|(var,_)| var.starts_with("v"))
+            .filter(|(var, _)| var.starts_with("v"))
             .map(|tuple| {
                 // println!("Checking selected tuple {:?}", tuple);
                 let (var, val) = tuple;
@@ -216,7 +232,7 @@ fn run_query(
                 &picked_rows,
                 &result_set,
                 headers,
-                header_index
+                header_index,
             ) {
                 assert_eq!(solution.status, Status::Optimal);
                 // println!("Iter {}, solution {:?}", iter_num, solution);
@@ -318,7 +334,7 @@ fn refine(
     query.cons.iter().for_each(|c| match c {
         QueryConstrain::Sum(expr) => {
             if let Some(index) = header_index.get(&expr.attr) {
-                let mut lhs = String::from("");
+                let mut lhs = String::with_capacity(STRING_BUFFER_SIZE);
                 vars.iter().for_each(|(row, v)| {
                     let cof = picked_rows[*row].1[*index];
                     lhs.push_str(&format!("+{}{}", cof, *v));
@@ -335,14 +351,14 @@ fn refine(
                 constrains.push(Constraint {
                     lhs: StrExpression(lhs),
                     operator: comp_op,
-                    rhs: rhs as f64
+                    rhs: rhs as f64,
                 });
             } else {
                 println!("Cannot find field \"{}\"", expr.attr);
             }
         }
         QueryConstrain::Count(count) => {
-            let mut lhs = String::from("");
+            let mut lhs = String::with_capacity(STRING_BUFFER_SIZE);
             vars.iter().for_each(|(_row, v)| {
                 lhs.push_str(&format!("+{}", *v));
             });
@@ -435,7 +451,7 @@ fn sketch(
         QueryConstrain::Sum(expr) => {
             if let Some(index) = header_index.get(&expr.attr) {
                 //println!("Attr: {}", expr.attr);
-                let mut lhs = String::from("");
+                let mut lhs = String::with_capacity(STRING_BUFFER_SIZE);
                 let mut lhs_sum = 0.0;
                 vars.iter().for_each(|(row, v)| {
                     let cof = tuples[*row][*index];
@@ -456,7 +472,7 @@ fn sketch(
             }
         }
         QueryConstrain::Count(count) => {
-            let mut lhs = String::from("");
+            let mut lhs = String::with_capacity(STRING_BUFFER_SIZE);
             vars.iter().for_each(|(_row, v)| {
                 lhs.push_str(&format!("+{}", *v));
             });
@@ -491,7 +507,7 @@ fn sketch(
         Ok(solution) => Some((solution, vars)),
         Err(err) => {
             println!(
-                "Cannot solve the linear programming problem in sketch phase: {:?}",
+                "Cannot solve the linear programming problem phase: {:?}",
                 err
             );
             None
@@ -583,5 +599,57 @@ impl QueryConstrainComp {
             }
         };
         (comp_op, rhs)
+    }
+}
+
+fn run_direct_query(
+    query_id: usize,
+    data: &DataSet,
+    query: &Query,
+    headers: &Vec<&str>,
+    header_index: &HashMap<String, usize>,
+) {
+    // Reuse sketch for runnning solver for direct query
+    println!("Using direct approach");
+    let all_rows = data.all_rows();
+    if let Some((solution, _vars)) = sketch(query_id, query, &all_rows, headers, header_index) {
+        if solution.status != Status::Optimal {
+            println!("Driect result not optimal: {:?}", solution.status);
+        }
+        let result_set = solution
+            .results
+            .iter()
+            // remove start with `x`
+            .filter(|(var, _)| var.starts_with("v"))
+            .map(|tuple| {
+                // println!("Checking selected tuple {:?}", tuple);
+                let (var, _val) = tuple;
+                let var_id = var[1..].parse::<usize>().unwrap();
+                // println!("{} => {}", var, var_id);
+                // assert!(*val >= 0.0, "Variable is negative {:?} = {}", var, val);
+                (var_id, tuple)
+            })
+            .filter(|(_i, (_var, val))| **val >= 1.0)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        let max_rows = 50;
+        println!("Result: {} rows", result_set.len());
+        headers.iter().for_each(|s| print!("|{}\t", s));
+        println!("|");
+        result_set
+            .iter()
+            .take(max_rows)
+            .map(|row_id| &all_rows[*row_id])
+            .for_each(|row| {
+                row.iter().for_each(|val| {
+                    print!("|{}\t", val);
+                });
+                println!("|");
+            });
+        if result_set.len() > max_rows {
+            println!("And more...")
+        }
+    } else {
+        println!("Cannot find the solution for direct approach")
     }
 }
