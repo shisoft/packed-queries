@@ -1,3 +1,4 @@
+use humantime::format_duration;
 use json5;
 use kmeans::{KMeans, KMeansConfig, KMeansState};
 use lp_solvers::problem::{Problem, StrExpression, Variable};
@@ -11,11 +12,11 @@ use memmap2::*;
 use rand::prelude::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::BufRead;
+use std::{cmp::Ordering, time::Instant};
 
 const STRING_BUFFER_SIZE: usize = 10240;
 
@@ -108,13 +109,19 @@ fn main() {
     println!("Found header {:?}", headers);
     println!("Read all data into memory for clustering");
     let num_cols = headers.len();
-    let data = read_all_data(&mapped, lines, first_line, num_cols);
+    let data = {
+        let _w = Watch::start("Read data");
+        read_all_data(&mapped, lines, first_line, num_cols)
+    };
     println!(
         "Read total of {} row of data, preparing clustering data",
         data.rows
     );
     let k = 200;
-    let clusters = clustering(&data, k);
+    let clusters = {
+        let _w = Watch::start("Clustering");
+        clustering(&data, k)
+    };
     let centroids = clusters
         .centroids
         .chunks_exact(num_cols)
@@ -149,18 +156,24 @@ fn main() {
                 println!("Accepting query {:?}", query);
                 if query.direct != Some(true) {
                     // Use sketch-refine approach
-                    run_query(
-                        query_id,
-                        &data,
-                        &query,
-                        &centroids,
-                        &headers,
-                        &header_index,
-                        &cluster_rows,
-                    );
+                    {
+                        let _w = Watch::start("Sketch-refine query");
+                        run_query(
+                            query_id,
+                            &data,
+                            &query,
+                            &centroids,
+                            &headers,
+                            &header_index,
+                            &cluster_rows,
+                        );
+                    }
                 } else {
                     // Use direct approach
-                    run_direct_query(query_id, &data, &query, &headers, &header_index);
+                    {
+                        let _w = Watch::start("Direct query");
+                        run_direct_query(query_id, &data, &query, &headers, &header_index);
+                    }
                 }
             }
             Err(e) => {
@@ -651,5 +664,31 @@ fn run_direct_query(
         }
     } else {
         println!("Cannot find the solution for direct approach")
+    }
+}
+
+struct Watch {
+    name: &'static str,
+    start: Instant,
+}
+
+impl Watch {
+    pub fn start(name: &'static str) -> Self {
+        Self {
+            name,
+            start: Instant::now(),
+        }
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        let elapsed = self.start.elapsed();
+        println!(
+            "Time for {} elapsed {}, total {} ms",
+            self.name,
+            format_duration(elapsed),
+            elapsed.as_millis()
+        )
     }
 }
