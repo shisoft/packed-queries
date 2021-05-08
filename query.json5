@@ -1,11 +1,8 @@
-{obj: {Minimize: "*"}, repeat_0: true, cons: [{Sum: {attr: "revenue", comp: {GE: 413930.849506}}},{Count: {GE: 1.0}}]}
-
-{obj: {Maximize: "count_order"}, repeat_0: true, cons: []}
-
-
-{obj: {Maximize: "count_order"}, repeat_0: true, cons: [{Sum: {attr: "sum_base_price", comp: {LE: 15469853.7043}}},{Sum: {attr: "sum_disc_price", comp: {LE: 45279795.0584}}},{Sum: {attr: "sum_charge", comp: {LE: 95250227.7918}}},{Sum: {attr: "avg_qty", comp: {LE: 50.353948653}}}]}
-
 {obj: {Maximize: "count_order"}, direct: true, repeat_0: true, cons: [{Sum: {attr: "sum_base_price", comp: {LE: 15469853.7043}}},{Sum: {attr: "sum_disc_price", comp: {LE: 45279795.0584}}},{Sum: {attr: "sum_charge", comp: {LE: 95250227.7918}}},{Sum: {attr: "avg_qty", comp: {LE: 50.353948653}}}]}
+
+{obj: {Maximize: "count_order"}, repeat_0: true,  cons: [ {Sum: {attr: "p_size",comp: {LE: 8}}}, {Count: {GE: 1.0}} ] }
+
+{obj: {Minimize: "*"}, repeat_0: true, cons: [{Sum: {attr: "revenue", comp: {GE: 413930.849506}}},{Count: {GE: 1.0}}]}
 
 {obj: {Minimize: "*"}, repeat_0: true, cons: [{Sum: {attr: "o_totalprice", comp: {LE: 453998.242103}}},{Sum: {attr: "o_shippriority", comp: {GE: 3}}}, {Count: {GE: 1.0}}]}
 
