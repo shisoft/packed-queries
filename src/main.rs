@@ -569,6 +569,7 @@ fn to_ndarray(data: &DataSet) -> Array2<f32> {
 }
 
 fn clustering(data: &DataSet, k: usize) -> Clusters {
+    println!("Clustering with k {}", k);
     let ndarray = to_ndarray(data);
     let obversations = DatasetBase::from(ndarray);
     let rand = StdRng::from_rng(thread_rng()).unwrap();
