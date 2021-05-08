@@ -22,3 +22,7 @@
 
         ```
                 cat query_sketchrefine.json5  |  ./target/release/packed-queries   [dataset.file]
+
+
+To use different values of K, the source code need to be changed (line 120) and recompiled.
+
