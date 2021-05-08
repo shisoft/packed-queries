@@ -119,7 +119,7 @@ fn main() {
         "Read total of {} row of data, preparing clustering data",
         data.rows
     );
-    let k = 200;
+    let k = 64;
     let clusters = {
         let _w = Watch::start("Clustering");
         clustering(&data, k)
