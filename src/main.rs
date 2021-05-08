@@ -232,6 +232,7 @@ fn run_query(
             .collect::<Vec<_>>();
         println!("Have {} candidates", candidates.len());
         candidates.shuffle(&mut rand);
+        let mut candidates_copy = candidates.clone();
         let mut result_set = vec![];
         let mut iter_num = 0;
         while let Some((cluster_id, _var, picked_rows)) = candidates.pop() {
@@ -255,7 +256,16 @@ fn run_query(
                     || solution.status == Status::Unbounded
                     || solution.results.iter().all(|(_, val)| *val == 0.0)
                 {
-                    panic!("BACKTRACK");
+                    println!(
+                        "Cannot have a viable solution from the solver: {:?}. Backtracking",
+                        solution.status
+                    );
+                    reorder_candidate(&mut candidates_copy, cluster_id);
+                    candidates = candidates_copy.clone();
+                    // Reset variables
+                    result_set.clear();
+                    iter_num = 0;
+                    continue;
                 }
                 if let Some((var, _val)) = solution
                     .results
@@ -286,6 +296,21 @@ fn run_query(
             println!("|");
         });
     }
+}
+
+fn reorder_candidate(
+    candidates: &mut Vec<(&usize, &&String, Vec<(usize, &[f32])>)>,
+    cluster_id: &usize,
+) {
+    let index = candidates
+        .iter()
+        .enumerate()
+        .find(|(_, (cid, _, _))| **cid == *cluster_id)
+        .map(|(i, _)| i)
+        .expect("Unexpected, should found the candidate");
+    let cluster = candidates.remove(index);
+    // Put it back to the head of the candidates
+    candidates.insert(0, cluster);
 }
 
 fn refine(
