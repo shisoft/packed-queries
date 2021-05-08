@@ -145,7 +145,7 @@ fn main() {
     //         .map(|(c, r)| format!("{}: {}", c, r.len()))
     //         .collect::<Vec<_>>()
     // );
-    let mut query_id = 1;
+    let mut query_id = 4;
     println!("Query [{}] >", query_id);
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
