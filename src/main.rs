@@ -441,89 +441,96 @@ fn sketch(
         return None;
     };
     let mut objective_expr = "".to_string();
-    let vars = tuples
-        .iter()
-        .enumerate()
-        .map(|(i, row)| {
-            let coefficient = *row.get(obj_field_idx).unwrap_or(&1.0) as f64;
-            let var_name = format!("v{}", i);
-            let variable = Variable {
-                name: var_name.clone(),
-                is_integer: true, // We want ILP solver
-                lower_bound: 0.0,
-                upper_bound: f64::MAX,
-            };
-            problem.variables.push(variable);
-            objective_expr.push_str(&format!("+{}{}", coefficient, var_name));
-            (i, var_name)
-        })
-        .collect::<Vec<_>>();
-    objective_expr = objective_expr[1..].to_string();
-    let mut constrains = vec![];
-    query.cons.iter().for_each(|c| match c {
-        QueryConstrain::Sum(expr) => {
-            if let Some(index) = header_index.get(&expr.attr) {
-                //println!("Attr: {}", expr.attr);
+    let vars;
+    {
+        let _w = Watch::start("Constructed problem for Cplex");
+        vars = tuples
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let coefficient = *row.get(obj_field_idx).unwrap_or(&1.0) as f64;
+                let var_name = format!("v{}", i);
+                let variable = Variable {
+                    name: var_name.clone(),
+                    is_integer: true, // We want ILP solver
+                    lower_bound: 0.0,
+                    upper_bound: f64::MAX,
+                };
+                problem.variables.push(variable);
+                objective_expr.push_str(&format!("+{}{}", coefficient, var_name));
+                (i, var_name)
+            })
+            .collect::<Vec<_>>();
+        objective_expr = objective_expr[1..].to_string();
+        let mut constrains = vec![];
+        query.cons.iter().for_each(|c| match c {
+            QueryConstrain::Sum(expr) => {
+                if let Some(index) = header_index.get(&expr.attr) {
+                    //println!("Attr: {}", expr.attr);
+                    let mut lhs = String::with_capacity(STRING_BUFFER_SIZE);
+                    let mut lhs_sum = 0.0;
+                    vars.iter().for_each(|(row, v)| {
+                        let cof = tuples[*row][*index];
+                        lhs_sum += cof;
+                        lhs.push_str(&format!("+{}{}", cof, *v));
+                    });
+                    let (comp_op, rhs) = expr.comp.to_solver_op();
+                    //println!("Sketch constrain rhs {}, lhs sum {}, op {:?}, exp: {}", rhs, lhs_sum, comp_op, lhs);
+                    // lhs, comp_op, rhs as f64
+                    lhs = lhs[1..].to_string();
+                    constrains.push(Constraint {
+                        lhs: StrExpression(lhs),
+                        operator: comp_op,
+                        rhs: rhs as f64,
+                    });
+                } else {
+                    println!("Cannot find field \"{}\"", expr.attr);
+                }
+            }
+            QueryConstrain::Count(count) => {
                 let mut lhs = String::with_capacity(STRING_BUFFER_SIZE);
-                let mut lhs_sum = 0.0;
-                vars.iter().for_each(|(row, v)| {
-                    let cof = tuples[*row][*index];
-                    lhs_sum += cof;
-                    lhs.push_str(&format!("+{}{}", cof, *v));
+                vars.iter().for_each(|(_row, v)| {
+                    lhs.push_str(&format!("+{}", *v));
                 });
-                let (comp_op, rhs) = expr.comp.to_solver_op();
-                //println!("Sketch constrain rhs {}, lhs sum {}, op {:?}, exp: {}", rhs, lhs_sum, comp_op, lhs);
-                // lhs, comp_op, rhs as f64
+                let (comp_op, rhs) = count.to_solver_op();
                 lhs = lhs[1..].to_string();
                 constrains.push(Constraint {
                     lhs: StrExpression(lhs),
                     operator: comp_op,
                     rhs: rhs as f64,
                 });
-            } else {
-                println!("Cannot find field \"{}\"", expr.attr);
             }
-        }
-        QueryConstrain::Count(count) => {
-            let mut lhs = String::with_capacity(STRING_BUFFER_SIZE);
-            vars.iter().for_each(|(_row, v)| {
-                lhs.push_str(&format!("+{}", *v));
-            });
-            let (comp_op, rhs) = count.to_solver_op();
-            lhs = lhs[1..].to_string();
-            constrains.push(Constraint {
-                lhs: StrExpression(lhs),
-                operator: comp_op,
-                rhs: rhs as f64,
-            });
-        }
-    });
-    if query.repeat_0 {
-        vars.iter().for_each(|(_row, v)| {
-            constrains.push(Constraint {
-                lhs: StrExpression(v.clone()),
-                operator: Ordering::Less,
-                rhs: 1.0,
-            })
         });
+        if query.repeat_0 {
+            vars.iter().for_each(|(_row, v)| {
+                constrains.push(Constraint {
+                    lhs: StrExpression(v.clone()),
+                    operator: Ordering::Less,
+                    rhs: 1.0,
+                })
+            });
+        }
+        // vars.iter().for_each(|(_row, v)| {
+        //     let mut lhs = LinearExpr::empty();
+        //     lhs.add(*v, 1.0f64);
+        //     problem.add_constraint(lhs, ComparisonOp::Ge, 0.0);
+        // });
+        //println!("Sketch constrains {:?}", constrains.);
+        //println!("Sketch objectives {:?} {:?}", objective, objective_expr);
+        problem.constraints = constrains;
+        problem.objective = StrExpression(objective_expr);
     }
-    // vars.iter().for_each(|(_row, v)| {
-    //     let mut lhs = LinearExpr::empty();
-    //     lhs.add(*v, 1.0f64);
-    //     problem.add_constraint(lhs, ComparisonOp::Ge, 0.0);
-    // });
-    //println!("Sketch constrains {:?}", constrains.);
-    //println!("Sketch objectives {:?} {:?}", objective, objective_expr);
-    problem.constraints = constrains;
-    problem.objective = StrExpression(objective_expr);
-    match Cplex::default().run(&problem) {
-        Ok(solution) => Some((solution, vars)),
-        Err(err) => {
-            println!(
-                "Cannot solve the linear programming problem phase: {:?}",
-                err
-            );
-            None
+    {
+        let _w = Watch::start("Solved the problem with Cplex");
+        match Cplex::default().run(&problem) {
+            Ok(solution) => Some((solution, vars)),
+            Err(err) => {
+                println!(
+                    "Cannot solve the linear programming problem phase: {:?}",
+                    err
+                );
+                None
+            }
         }
     }
 }
