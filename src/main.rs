@@ -581,6 +581,7 @@ fn clustering(data: &DataSet, k: usize) -> Clusters {
         let _w = Watch::start("Cluster Fitting...");
         KMeans::params_with_rng(k, rand)
             .max_n_iterations(100)
+            .tolerance(2.0)
             .fit(&obversations)
             .expect("KMeans fitted")
     };
