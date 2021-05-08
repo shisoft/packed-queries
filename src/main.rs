@@ -573,10 +573,16 @@ fn clustering(data: &DataSet, k: usize) -> Clusters {
     let obversations = DatasetBase::from(ndarray);
     let rand = StdRng::from_rng(thread_rng()).unwrap();
     // let clusters = Dbscan::params(k).tolerance(1e-2).transform(&ndarray);
-    let model = KMeans::params_with_rng(k, rand)
+    let model = {
+        let _w = Watch::start("Cluster Fitting...");
+        KMeans::params_with_rng(k, rand)
         .fit(&obversations)
-        .expect("KMeans fitted");
-    let assignments = model.predict(obversations);
+        .expect("KMeans fitted")
+    };
+    let assignments = {
+        let _w = Watch::start("Cluster Predicting...");
+        model.predict(obversations)
+    };
     Clusters {
         ncols: data.num_cols,
         representatives: assignments.records,
@@ -602,9 +608,6 @@ impl Clusters {
                 &slice[i..ends]
             })
             .collect()
-    }
-    fn assignments_vec(&self) -> Vec<usize> {
-        self.assignments.to_vec()
     }
 }
 
