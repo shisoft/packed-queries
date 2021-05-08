@@ -247,11 +247,14 @@ fn run_query(
                 headers,
                 header_index,
             ) {
-                assert_eq!(solution.status, Status::Optimal);
                 // println!("Iter {}, solution {:?}", iter_num, solution);
                 iter_num += 1;
                 // All the variables == 0.0, backtrack, do cluster_id first
-                if solution.results.iter().all(|(_, val)| *val == 0.0) {
+                if solution.status == Status::Infeasible
+                    || solution.status == Status::NotSolved
+                    || solution.status == Status::Unbounded
+                    || solution.results.iter().all(|(_, val)| *val == 0.0)
+                {
                     panic!("BACKTRACK");
                 }
                 if let Some((var, _val)) = solution
