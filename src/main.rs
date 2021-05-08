@@ -596,6 +596,28 @@ fn clustering(data: &DataSet, k: usize) -> Clusters {
     }
 }
 
+fn clustering_by_dbscan(data: &DataSet, k: usize) -> Clusters {
+    println!("Clustering with k {}", k);
+    let ndarray = {
+        let _w = Watch::start("Cluster data convertion...");
+        to_ndarray(data)
+    };
+    let min_points = k;
+    let result = Dbscan::params(min_points).transform(&ndarray);
+    let num_clusters = result.iter().filter_map(|i| i.to_owned()).max().unwrap();
+    let assignments = result
+        .iter()
+        .map(|i| i.unwrap_or(num_clusters + 1))
+        .collect::<Array1<_>>();
+    let representatives = assignments.iter().enumerate().group_by(|(i, c)| c);
+    // Clusters {
+    //     ncols: data.num_cols,
+    //     representatives: assignments.records,
+    //     assignments: assignments,
+    // }
+    unimplemented!()
+}
+
 struct Clusters {
     ncols: usize,
     assignments: Array1<usize>,
