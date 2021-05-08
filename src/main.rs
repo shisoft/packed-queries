@@ -1,6 +1,7 @@
 use humantime::format_duration;
 use json5;
-use kmeans::{KMeans, KMeansConfig, KMeansState};
+use linfa::{traits::*, DatasetBase};
+use linfa_clustering::*;
 use lp_solvers::problem::{Problem, StrExpression, Variable};
 use lp_solvers::solvers::{Cplex, SolverTrait};
 use lp_solvers::{
@@ -9,6 +10,7 @@ use lp_solvers::{
 };
 use memchr::{memchr_iter, Memchr};
 use memmap2::*;
+use ndarray::*;
 use rand::prelude::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -122,10 +124,7 @@ fn main() {
         let _w = Watch::start("Clustering");
         clustering(&data, k)
     };
-    let centroids = clusters
-        .centroids
-        .chunks_exact(num_cols)
-        .collect::<Vec<_>>();
+    let centroids = clusters.representatives_vec();
     assert_eq!(
         centroids.len(),
         k,
@@ -563,29 +562,75 @@ fn sketch(
     }
 }
 
-fn clustering(data: &DataSet, k: usize) -> KMeansState<f32> {
-    let iter = 32;
-    let (sample_cnt, sample_dims, k, max_iter) = (data.rows, data.num_cols, k, iter);
-    let data_clone = data.buffer.clone();
-    // Calculate kmeans, using kmean++ as initialization-method
-    println!(
-        "Clustering with k: {}, iter: {}, dim {}, size {}",
-        k,
-        iter,
-        data.num_cols,
-        data_clone.len()
-    );
-    let kmean = KMeans::new(data_clone, sample_cnt, sample_dims);
-    let result = kmean.kmeans_minibatch(
-        1024,
-        k,
-        max_iter,
-        KMeans::init_kmeanplusplus,
-        &KMeansConfig::default(),
-    );
-    println!("Clustered...");
-    result
+fn to_ndarray(data: &DataSet) -> Array2<f32> {
+    let shape = (data.rows, data.num_cols);
+    let vec = data.buffer.clone();
+    Array2::from_shape_vec(shape, vec).expect("Cannot convert array")
 }
+
+fn clustering(data: &DataSet, k: usize) -> Clusters {
+    let ndarray = to_ndarray(data);
+    let obversations = DatasetBase::from(ndarray);
+    let rand = StdRng::from_rng(thread_rng()).unwrap();
+    // let clusters = Dbscan::params(k).tolerance(1e-2).transform(&ndarray);
+    let model = KMeans::params_with_rng(k, rand)
+        .fit(&obversations)
+        .expect("KMeans fitted");
+    let assignments = model.predict(obversations);
+    Clusters {
+        ncols: data.num_cols,
+        representatives: assignments.records,
+        assignments: assignments.targets,
+    }
+}
+
+struct Clusters {
+    ncols: usize,
+    assignments: Array1<usize>,
+    representatives: Array2<f32>,
+}
+
+impl Clusters {
+    fn representatives_vec(&self) -> Vec<&[f32]> {
+        let slice = self.representatives.as_slice().unwrap();
+        let ncols = self.ncols;
+        let ndata = slice.len();
+        (0..ndata)
+            .step_by(ncols)
+            .map(|i| {
+                let ends = i + ncols;
+                &slice[i..ends]
+            })
+            .collect()
+    }
+    fn assignments_vec(&self) -> Vec<usize> {
+        self.assignments.to_vec()
+    }
+}
+
+// fn clustering(data: &DataSet, k: usize) -> KMeansState<f32> {
+//     let iter = 32;
+//     let (sample_cnt, sample_dims, k, max_iter) = (data.rows, data.num_cols, k, iter);
+//     let data_clone = data.buffer.clone();
+//     // Calculate kmeans, using kmean++ as initialization-method
+//     println!(
+//         "Clustering with k: {}, iter: {}, dim {}, size {}",
+//         k,
+//         iter,
+//         data.num_cols,
+//         data_clone.len()
+//     );
+//     let kmean = KMeans::new(data_clone, sample_cnt, sample_dims);
+//     let result = kmean.kmeans_minibatch(
+//         1024,
+//         k,
+//         max_iter,
+//         KMeans::init_kmeanplusplus,
+//         &KMeansConfig::default(),
+//     );
+//     println!("Clustered...");
+//     result
+// }
 
 fn read_line(mem: &Mmap, start: usize, ends: usize) -> Vec<&str> {
     let raw_bytes = &mem[start..ends];

@@ -6,7 +6,6 @@ edition = "2018"
 
 [dependencies]
 memmap2 = "0.2"
-kmeans = "0.2.0"
 memchr = "2.3.4"
 rayon = "1.5.0"
 serde = { version = "1", features = ["derive"] }
@@ -15,3 +14,6 @@ itertools = "0.10"
 rand = "0.8"
 lp-solvers = {version = "*", features = ["cplex"]}
 humantime = "2"
+linfa-clustering = "0.4"
+linfa = "0.4"
+ndarray = { version = "0.14" }
