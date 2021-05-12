@@ -8,7 +8,7 @@
 2. Build the binary by running the following command
 
 	```
-		cargo build
+		cargo build --release
 
 	```
 
