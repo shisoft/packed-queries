@@ -20,8 +20,9 @@
 
 4. Run the queries using sketchrefine with a specific data set file using the following command:
 
-        ```
-                cat query_sketchrefine.json5  |  ./target/release/packed-queries   [dataset.file]
+	```
+	        cat query_sketchrefine.json5  |  ./target/release/packed-queries   [dataset.file]
+	```
 
 
 To use different values of K, the source code need to be changed (line 120) and recompiled.
